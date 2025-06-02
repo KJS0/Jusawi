@@ -23,35 +23,32 @@ class JusawiViewer(QWidget):
         main_layout.addWidget(self.image_display_area, 1)
 
         button_layout = QHBoxLayout()
+        self.open_button = QPushButton("열기")
+        self.open_button.clicked.connect(self.open_file)
+
         self.prev_button = QPushButton("이전")
         self.next_button = QPushButton("다음")
         self.prev_button.clicked.connect(self.show_prev_image)
         self.next_button.clicked.connect(self.show_next_image)
         
+        button_layout.addWidget(self.open_button)
         button_layout.addStretch(1)
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.next_button)
-        button_layout.addStretch(1)
 
         main_layout.addLayout(button_layout)
         self.setLayout(main_layout)
 
         self.update_button_states()
-        
-        self.load_successful = self.open_file_and_load_initial_image()
-        if not self.load_successful:
-            QTimer.singleShot(0, self.close)
 
-    def open_file_and_load_initial_image(self):
+    def open_file(self):
         file_path = open_file_dialog_util(self)
         if file_path:
-            return self.load_image(file_path)
-        else:
-            print("이미지를 선택하지 않았습니다. 프로그램을 종료합니다.")
-            return False
+            self.load_image(file_path)
 
     def load_image(self, file_path):
         loaded_path, success = load_image_util(file_path, self.image_display_area)
+        self.load_successful = success
         if not success:
             self.current_image_path = None
             self.image_files_in_dir = []
