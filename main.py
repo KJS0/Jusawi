@@ -7,10 +7,10 @@ class ImageLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(1, 1) # 위젯이 매우 작아질 수 있도록 최소 크기 설정
-        self.pixmap = None
+        self.pixmap = None # 이미지 저장
         self.setAlignment(Qt.AlignmentFlag.AlignCenter) # 이미지를 중앙에 정렬
 
-    def setPixmap(self, pixmap):
+    def setPixmap(self, pixmap): # 이미지 설정
         if pixmap and not pixmap.isNull():
             self.pixmap = pixmap
         else:
@@ -24,16 +24,19 @@ class ImageLabel(QLabel):
         if not self.pixmap or self.pixmap.isNull():
             return
 
+        # 이미지 크기 조정
         size = self.size()
         scaled_pixmap = self.pixmap.scaled(size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         
         # 이미지를 중앙에 배치
         x = (size.width() - scaled_pixmap.width()) / 2
         y = (size.height() - scaled_pixmap.height()) / 2
+
+        # 이미지 그리기
         painter.drawPixmap(int(x), int(y), scaled_pixmap)
 
     def sizeHint(self):
-        return QSize(640, 480)
+        return QSize(480, 320)
 
 class JusawiViewer(QWidget):
     def __init__(self):
@@ -49,7 +52,7 @@ class JusawiViewer(QWidget):
 
         # 프로그램 시작 시 파일 열기 대화상자 실행 및 결과 확인
         if not self.open_file_dialog():
-            QTimer.singleShot(0, self.close) 
+            QTimer.singleShot(0, self.close)
 
     def open_file_dialog(self):
         file_filter = "사진 (*.jpeg *.jpg *.png *.bmp *.gif *.tiff)"
