@@ -8,6 +8,7 @@ class ImageLabel(QLabel):
         self.setMinimumSize(1, 1) 
         self.pixmap = None 
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) # 키보드 포커스 허용 (향후 확장을 위해)
 
     def setPixmap(self, pixmap): 
         if pixmap and not pixmap.isNull():

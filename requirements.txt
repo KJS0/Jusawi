@@ -1,1 +1,2 @@
 PyQt6==6.9.0
+send2trash==1.8.0
