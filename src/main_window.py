@@ -1,10 +1,10 @@
 import os
 import sys
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel
+from PyQt6.QtCore import QTimer, Qt, QEvent
 from PyQt6.QtGui import QKeySequence, QShortcut
 
-from .image_label import ImageLabel
+from .image_view import ImageView
 from .file_utils import open_file_dialog_util, load_image_util, scan_directory_util
 
 class JusawiViewer(QMainWindow):
@@ -16,6 +16,11 @@ class JusawiViewer(QMainWindow):
         self.image_files_in_dir = []
         self.current_image_index = -1
         self.load_successful = False
+        # 줌 상태(레거시 변수는 유지하되, ImageView가 관리)
+        self.scale_factor = 1.0
+        self.fit_mode = True
+        self.min_scale = 0.01
+        self.max_scale = 16.0
         
         # 전체화면 및 슬라이드쇼 상태 관리
         self.is_fullscreen = False
@@ -23,31 +28,66 @@ class JusawiViewer(QMainWindow):
         self.button_layout = None  # 나중에 설정
         self.previous_window_state = None  # 전체화면 이전 상태 저장
 
+        # 상태 캐시(우측 상태 표시용)
+        self._last_cursor_x = 0
+        self._last_cursor_y = 0
+        self._last_scale = 1.0
+
         # QMainWindow의 중앙 위젯 설정
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(5, 5, 5, 5)
+        self.main_layout = QVBoxLayout(central_widget)
+        self.main_layout.setContentsMargins(5, 5, 5, 5)
+        self._normal_margins = (5, 5, 5, 5)
 
-        self.image_display_area = ImageLabel(central_widget)
-        main_layout.addWidget(self.image_display_area, 1)
+        # ImageView (QGraphicsView 기반)
+        self.image_display_area = ImageView(central_widget)
+        self.image_display_area.scaleChanged.connect(self.on_scale_changed)
+        self.image_display_area.cursorPosChanged.connect(self.on_cursor_pos_changed)
+        # 명시적 min/max 스케일 설정
+        self.image_display_area.set_min_max_scale(self.min_scale, self.max_scale)
+        self.main_layout.addWidget(self.image_display_area, 1)
 
         self.button_layout = QHBoxLayout()
         self.open_button = QPushButton("열기")
         self.open_button.clicked.connect(self.open_file)
 
+        # 새로: 전체화면 버튼
+        self.fullscreen_button = QPushButton("전체화면")
+        self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
+
+        # 줌/내비 컨트롤 버튼
         self.prev_button = QPushButton("이전")
         self.next_button = QPushButton("다음")
         self.prev_button.clicked.connect(self.show_prev_image)
         self.next_button.clicked.connect(self.show_next_image)
-        
+        self.zoom_out_button = QPushButton("축소")
+        self.zoom_out_button.clicked.connect(self.zoom_out)
+        self.fit_button = QPushButton("100%")
+        self.fit_button.clicked.connect(self.reset_to_100)
+        self.zoom_in_button = QPushButton("확대")
+        self.zoom_in_button.clicked.connect(self.zoom_in)
+
+        # 버튼 순서: 열기 전체화면 이전 다음 축소 100% 확대
         self.button_layout.addWidget(self.open_button)
-        self.button_layout.addStretch(1)
+        self.button_layout.addWidget(self.fullscreen_button)
         self.button_layout.addWidget(self.prev_button)
         self.button_layout.addWidget(self.next_button)
+        self.button_layout.addWidget(self.zoom_out_button)
+        self.button_layout.addWidget(self.fit_button)
+        self.button_layout.addWidget(self.zoom_in_button)
 
-        main_layout.addLayout(self.button_layout)
+        self.main_layout.insertLayout(0, self.button_layout)
+
+        # 상태바: 좌측/우측 구성
+        self.status_left_label = QLabel("", self)
+        self.status_right_label = QLabel("", self)
+        # 좌측: addWidget, 우측: addPermanentWidget
+        self.statusBar().addWidget(self.status_left_label, 1)
+        self.statusBar().addPermanentWidget(self.status_right_label)
+        self.update_status_left()
+        self.update_status_right()
 
         # 키보드 단축키 설정
         self.setup_shortcuts()
@@ -56,6 +96,93 @@ class JusawiViewer(QMainWindow):
         self.image_display_area.setFocus()
         
         self.update_button_states()
+
+    def clamp(self, value, min_v, max_v):
+        return max(min_v, min(value, max_v))
+
+    def human_readable_size(self, size_bytes: int) -> str:
+        try:
+            b = float(size_bytes)
+        except Exception:
+            return "-"
+        units = ["B", "KiB", "MiB", "GiB", "TiB"]
+        i = 0
+        while b >= 1024.0 and i < len(units) - 1:
+            b /= 1024.0
+            i += 1
+        if i == 0:
+            return f"{int(b)} {units[i]}"
+        return f"{b:.2f} {units[i]}"
+
+    def update_status_left(self):
+        if not self.load_successful or not self.current_image_path:
+            self.status_left_label.setText("")
+            return
+        # index/total
+        total = len(self.image_files_in_dir)
+        idx_disp = self.current_image_index + 1 if 0 <= self.current_image_index < total else 0
+        filename = os.path.basename(self.current_image_path)
+        # size
+        try:
+            size_bytes = os.path.getsize(self.current_image_path)
+            size_str = self.human_readable_size(size_bytes)
+        except OSError:
+            size_str = "-"
+        # dimensions and depth
+        w = h = depth = 0
+        pix = self.image_display_area.originalPixmap()
+        if pix and not pix.isNull():
+            w = pix.width()
+            h = pix.height()
+            try:
+                depth = pix.toImage().depth()
+            except Exception:
+                depth = 0
+        dims = f"{w}*{h}*{depth}"
+        self.status_left_label.setText(f"{idx_disp}/{total} {filename} {size_str} {dims}")
+
+    def update_status_right(self):
+        percent = int(round(self._last_scale * 100))
+        self.status_right_label.setText(f"X:{self._last_cursor_x}, Y:{self._last_cursor_y} {percent}%")
+
+    def on_scale_changed(self, scale: float):
+        self._last_scale = scale
+        self.update_status_right()
+
+    def on_cursor_pos_changed(self, x: int, y: int):
+        self._last_cursor_x = x
+        self._last_cursor_y = y
+        self.update_status_right()
+
+    def reset_zoom(self, fit=True):
+        self.fit_mode = bool(fit)
+        if self.fit_mode:
+            self.image_display_area.fit_to_window()
+        else:
+            self.scale_factor = 1.0
+        self.update_button_states()
+
+    def fit_to_window(self):
+        if not self.load_successful:
+            return
+        self.image_display_area.fit_to_window()
+        self.update_button_states()
+
+    def zoom_in(self):
+        if not self.load_successful:
+            return
+        self.image_display_area.zoom_in()
+        self.update_button_states()
+
+    def zoom_out(self):
+        if not self.load_successful:
+            return
+        self.image_display_area.zoom_out()
+        self.update_button_states()
+
+    def on_wheel_zoom(self, delta_y, ctrl, vp_anchor):
+        # ImageView가 휠 이벤트를 처리하므로 이 메서드는 사용하지 않습니다.
+        pass
 
     def update_window_title(self, file_path=None):
         """창 제목 업데이트"""
@@ -83,6 +210,8 @@ class JusawiViewer(QMainWindow):
         # Del : 현재 이미지 삭제
         QShortcut(QKeySequence("Delete"), self, self.delete_current_image)
 
+        # 주의: Ctrl +/-/0 단축키는 제거됨
+
     def toggle_fullscreen(self):
         """전체화면 모드 토글"""
         if self.is_fullscreen:
@@ -107,8 +236,20 @@ class JusawiViewer(QMainWindow):
             if widget:
                 widget.hide()
         
+        # 상태바 숨김
+        self.statusBar().hide()
+        
+        # 레이아웃 마진 제거
+        margins = self.main_layout.contentsMargins()
+        self._normal_margins = (margins.left(), margins.top(), margins.right(), margins.bottom())
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        # 스크롤바(있다면) 숨김
+        self.image_display_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.image_display_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
         # 직접 전체화면으로 전환 (애니메이션 최소화)
         self.showFullScreen()
+        QTimer.singleShot(0, lambda: self.image_display_area.fit_to_window())
 
     def exit_fullscreen(self):
         """전체화면 모드 종료 (제목표시줄 보장)"""
@@ -130,6 +271,22 @@ class JusawiViewer(QMainWindow):
             widget = self.button_layout.itemAt(i).widget()
             if widget:
                 widget.show()
+        
+        # 상태바 표시
+        self.statusBar().show()
+        
+        # 레이아웃 마진 복원
+        try:
+            l, t, r, b = self._normal_margins
+            self.main_layout.setContentsMargins(l, t, r, b)
+        except Exception:
+            self.main_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 스크롤바 정책 복원: 필요 시 자동
+        self.image_display_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.image_display_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        QTimer.singleShot(0, lambda: self.image_display_area.fit_to_window())
 
     def handle_escape(self):
         """Esc 키 처리 - 전체화면 종료 또는 프로그램 종료"""
@@ -279,6 +436,8 @@ class JusawiViewer(QMainWindow):
         self.current_image_path = None
         self.current_image_index = -1
         self.update_window_title()  # 제목도 초기화
+        self.update_status_left()
+        self.update_status_right()
 
     def open_file(self):
         file_path = open_file_dialog_util(self)
@@ -298,12 +457,18 @@ class JusawiViewer(QMainWindow):
             self.update_window_title(loaded_path)  # 제목 업데이트
             if os.path.exists(file_path):
                  self.scan_directory(os.path.dirname(file_path))
+            # ImageView가 로드 시 자동 맞춤
+            self.update_button_states()
         self.update_button_states()
+        # 상태바 갱신
+        self.update_status_left()
+        self.update_status_right()
         return success
 
     def scan_directory(self, dir_path):
         self.image_files_in_dir, self.current_image_index = scan_directory_util(dir_path, self.current_image_path)
         self.update_button_states()
+        self.update_status_left()
 
     def show_prev_image(self):
         if self.current_image_index > 0:
@@ -325,3 +490,27 @@ class JusawiViewer(QMainWindow):
         
         self.prev_button.setEnabled(is_valid_index and self.current_image_index > 0)
         self.next_button.setEnabled(is_valid_index and self.current_image_index < num_images - 1)
+        # 줌 버튼 상태
+        has_image = bool(self.load_successful)
+        self.zoom_in_button.setEnabled(has_image)
+        self.zoom_out_button.setEnabled(has_image)
+        self.fit_button.setEnabled(has_image)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # ImageView가 자체 맞춤을 처리
+        pass
+
+    def reset_to_100(self):
+        if not self.load_successful:
+            return
+        self.fit_mode = False
+        self.scale_factor = 1.0
+        # ImageView에 100% 적용
+        self.image_display_area.reset_to_100()
+        self.update_button_states()
+        self.update_status_right()
+
+    # QGraphicsView 기반을 사용하므로 별도 이벤트 필터 불필요
+    def eventFilter(self, obj, event):
+        return super().eventFilter(obj, event)
