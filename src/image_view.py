@@ -31,6 +31,8 @@ class ImageView(QGraphicsView):
         self._fit_mode = True
         self._min_scale = 0.01  # 1%
         self._max_scale = 16.0  # 1600%
+        # View mode: 'fit' | 'fit_width' | 'fit_height' | 'actual'
+        self._view_mode = 'fit'
 
     # API 호환: file_utils.load_image_util에서 setPixmap 호출을 사용
     def setPixmap(self, pixmap: QPixmap | None):
@@ -43,10 +45,8 @@ class ImageView(QGraphicsView):
             self._original_pixmap = pixmap
             # 장면 경계를 이미지 크기로 설정하여 중앙 정렬 기준을 명확히 함
             self._scene.setSceneRect(self._pix_item.boundingRect())
-            # 새 이미지 로드시 맞춤 후 중앙으로 이동
-            self._fit_mode = True
-            self._apply_fit()
-            self._center_view()
+            # 새 이미지 로드시 현재 보기 모드를 적용
+            self.apply_current_view_mode()
         else:
             self.resetTransform()
             self._current_scale = 1.0
@@ -82,6 +82,54 @@ class ImageView(QGraphicsView):
         m = self.transform()
         self._current_scale = m.m11()
         self.scaleChanged.emit(self._current_scale)
+
+    def _apply_fit_width(self):
+        if not self._pix_item or not self._original_pixmap:
+            return
+        img_w = self._original_pixmap.width()
+        if img_w <= 0:
+            return
+        vp_w = max(1, self.viewport().width())
+        scale = vp_w / float(img_w)
+        clamped = self.clamp(scale, self._min_scale, self._max_scale)
+        t = QTransform()
+        t.scale(clamped, clamped)
+        self.setTransform(t)
+        self._current_scale = clamped
+        self.scaleChanged.emit(self._current_scale)
+        self._center_view()
+
+    def _apply_fit_height(self):
+        if not self._pix_item or not self._original_pixmap:
+            return
+        img_h = self._original_pixmap.height()
+        if img_h <= 0:
+            return
+        vp_h = max(1, self.viewport().height())
+        scale = vp_h / float(img_h)
+        clamped = self.clamp(scale, self._min_scale, self._max_scale)
+        t = QTransform()
+        t.scale(clamped, clamped)
+        self.setTransform(t)
+        self._current_scale = clamped
+        self.scaleChanged.emit(self._current_scale)
+        self._center_view()
+
+    def apply_current_view_mode(self):
+        if self._view_mode == 'fit':
+            self._fit_mode = True
+            self._apply_fit()
+            self._center_view()
+        elif self._view_mode == 'fit_width':
+            self._fit_mode = False
+            self._apply_fit_width()
+        elif self._view_mode == 'fit_height':
+            self._fit_mode = False
+            self._apply_fit_height()
+        elif self._view_mode == 'actual':
+            self._fit_mode = False
+            self.set_absolute_scale(1.0)
+            self._center_view()
 
     def _center_view(self):
         if self._pix_item:
@@ -134,20 +182,34 @@ class ImageView(QGraphicsView):
 
     def zoom_in(self):
         self._fit_mode = False
+        self._view_mode = 'free'
         base = self._dynamic_step()
         self.zoom_step(base)
 
     def zoom_out(self):
         self._fit_mode = False
+        self._view_mode = 'free'
         base = self._dynamic_step()
         self.zoom_step(1.0 / base)
 
     def reset_to_100(self):
         self._fit_mode = False
+        self._view_mode = 'actual'
         self.set_absolute_scale(1.0)
 
     def fit_to_window(self):
+        self._view_mode = 'fit'
         self.set_fit_mode(True)
+
+    def fit_to_width(self):
+        self._view_mode = 'fit_width'
+        self._fit_mode = False
+        self._apply_fit_width()
+
+    def fit_to_height(self):
+        self._view_mode = 'fit_height'
+        self._fit_mode = False
+        self._apply_fit_height()
 
     def sizeHint(self) -> QSize:
         return QSize(640, 480)
@@ -178,6 +240,8 @@ class ImageView(QGraphicsView):
             event.accept()
             return
         # Ctrl 단독일 때만 줌 수행
+        # 수동 줌 시작: 보기 모드를 free로 전환해 fit 재적용을 방지
+        self._view_mode = 'free'
         if event.angleDelta().y() > 0:
             self.zoom_in()
         else:
@@ -203,6 +267,14 @@ class ImageView(QGraphicsView):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._fit_mode:
-            self._apply_fit()
-            self._center_view() 
+        # 현재 보기 모드를 유지하며 재적용
+        if self._view_mode in ('fit', 'fit_width', 'fit_height'):
+            self.apply_current_view_mode()
+
+    def mouseDoubleClickEvent(self, event):
+        # 더블클릭: 화면 맞춤 ↔ 실제 크기 토글
+        if self._view_mode == 'actual':
+            self.fit_to_window()
+        else:
+            self.reset_to_100()
+        super().mouseDoubleClickEvent(event) 

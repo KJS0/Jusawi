@@ -222,6 +222,18 @@ class JusawiViewer(QMainWindow):
         self.image_display_area.fit_to_window()
         self.update_button_states()
 
+    def fit_to_width(self):
+        if not self.load_successful:
+            return
+        self.image_display_area.fit_to_width()
+        self.update_button_states()
+
+    def fit_to_height(self):
+        if not self.load_successful:
+            return
+        self.image_display_area.fit_to_height()
+        self.update_button_states()
+
     def zoom_in(self):
         if not self.load_successful:
             return
@@ -263,6 +275,12 @@ class JusawiViewer(QMainWindow):
         
         # Del : 현재 이미지 삭제
         QShortcut(QKeySequence("Delete"), self, self.delete_current_image)
+
+        # 보기 모드 단축키
+        QShortcut(QKeySequence("F"), self, self.fit_to_window)
+        QShortcut(QKeySequence("W"), self, self.fit_to_width)
+        QShortcut(QKeySequence("H"), self, self.fit_to_height)
+        QShortcut(QKeySequence("1"), self, self.reset_to_100)
 
         # 주의: Ctrl +/-/0 단축키는 제거됨
 
