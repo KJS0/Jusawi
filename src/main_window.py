@@ -1,8 +1,8 @@
 import os
 import sys
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy
-from PyQt6.QtCore import QTimer, Qt, QEvent, QUrl
-from PyQt6.QtGui import QKeySequence, QShortcut, QImage
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu
+from PyQt6.QtCore import QTimer, Qt, QEvent, QUrl, QSettings, QPointF
+from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction
 
 from .image_view import ImageView
 from .file_utils import open_file_dialog_util, load_image_util, scan_directory_util, SUPPORTED_FORMATS
@@ -32,6 +32,14 @@ class JusawiViewer(QMainWindow):
         self._last_cursor_x = 0
         self._last_cursor_y = 0
         self._last_scale = 1.0
+        self._last_view_mode = 'fit'
+        self._last_center = QPointF(0.0, 0.0)
+
+        # 설정 저장(QSettings)
+        self.settings = QSettings("Jusawi", "Jusawi")
+        self.recent_files = []  # list[dict]
+        self.recent_folders = []  # list[dict]
+        self.last_open_dir = ""
 
         # QMainWindow의 중앙 위젯 설정
         central_widget = QWidget()
@@ -66,6 +74,10 @@ class JusawiViewer(QMainWindow):
         self.button_layout = QHBoxLayout()
         self.open_button = QPushButton("열기")
         self.open_button.clicked.connect(self.open_file)
+        # 최근 메뉴를 별도 버튼에 연결
+        self.recent_menu = QMenu(self)
+        self.recent_button = QPushButton("최근 파일")
+        self.recent_button.setMenu(self.recent_menu)
 
         # 새로: 전체화면 버튼
         self.fullscreen_button = QPushButton("전체화면")
@@ -87,6 +99,7 @@ class JusawiViewer(QMainWindow):
         button_style = "color: #EAEAEA;"
         for btn in [
             self.open_button,
+            self.recent_button,
             self.fullscreen_button,
             self.prev_button,
             self.next_button,
@@ -97,8 +110,9 @@ class JusawiViewer(QMainWindow):
             btn.setStyleSheet(button_style)
             btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
-        # 버튼 순서: 열기 전체화면 이전 다음 축소 100% 확대
+        # 버튼 순서: 열기 최근 전체화면 이전 다음 축소 100% 확대
         self.button_layout.addWidget(self.open_button)
+        self.button_layout.addWidget(self.recent_button)
         self.button_layout.addWidget(self.fullscreen_button)
         self.button_layout.addWidget(self.prev_button)
         self.button_layout.addWidget(self.next_button)
@@ -152,6 +166,14 @@ class JusawiViewer(QMainWindow):
         # 전역 DnD 지원: 주요 위젯에 일괄 적용
         self._setup_global_dnd()
 
+        # 전체화면 진입 전 스타일 복원용 변수
+        self._stylesheet_before_fullscreen = None
+
+        # 설정 로드 및 최근/세션 복원
+        self.load_settings()
+        self.rebuild_recent_menu()
+        self.restore_last_session()
+
     def clamp(self, value, min_v, max_v):
         return max(min_v, min(value, max_v))
 
@@ -166,7 +188,7 @@ class JusawiViewer(QMainWindow):
         widgets = [
             self.centralWidget(),
             self.button_bar,
-            self.open_button, self.fullscreen_button, self.prev_button, self.next_button,
+            self.open_button, self.recent_button, self.fullscreen_button, self.prev_button, self.next_button,
             self.zoom_out_button, self.fit_button, self.zoom_in_button,
             self.image_display_area,
             getattr(self.image_display_area, 'viewport', lambda: None)(),
@@ -175,6 +197,84 @@ class JusawiViewer(QMainWindow):
         for w in widgets:
             if w:
                 self._enable_dnd_on(w)
+
+    # Settings: 저장/로드
+    def load_settings(self):
+        try:
+            self.recent_files = self.settings.value("recent/files", [], list)
+            self.recent_folders = self.settings.value("recent/folders", [], list)
+            if not isinstance(self.recent_files, list): self.recent_files = []
+            if not isinstance(self.recent_folders, list): self.recent_folders = []
+            self.last_open_dir = self.settings.value("recent/last_open_dir", "", str)
+            if not isinstance(self.last_open_dir, str): self.last_open_dir = ""
+        except Exception:
+            self.recent_files = []
+            self.recent_folders = []
+            self.last_open_dir = ""
+
+    def save_settings(self):
+        try:
+            self.settings.setValue("recent/files", self.recent_files)
+            self.settings.setValue("recent/folders", self.recent_folders)
+            self.settings.setValue("recent/last_open_dir", self.last_open_dir)
+        except Exception:
+            pass
+
+    # 최근 항목: 유틸
+    def _normalize_path(self, p: str) -> str:
+        try:
+            return os.path.normcase(os.path.normpath(p))
+        except Exception:
+            return p
+
+    def _update_mru(self, mru_list: list, path: str, max_items: int = 10) -> list:
+        norm = self._normalize_path(path)
+        filtered = []
+        seen = set()
+        for it in mru_list:
+            ip = it.get("path", "") if isinstance(it, dict) else str(it)
+            key = self._normalize_path(ip)
+            if key and key != norm and key not in seen:
+                filtered.append({"path": ip})
+                seen.add(key)
+        filtered.insert(0, {"path": path})
+        return filtered[:max_items]
+
+    def rebuild_recent_menu(self):
+        self.recent_menu.clear()
+        # 최근 파일만 표시
+        if self.recent_files:
+            for item in self.recent_files:
+                path = item.get("path") if isinstance(item, dict) else str(item)
+                act = QAction(os.path.basename(path), self)
+                act.setToolTip(path)
+                act.triggered.connect(lambda _, p=path: self.load_image(p, source='recent'))
+                self.recent_menu.addAction(act)
+            self.recent_menu.addSeparator()
+        # 비우기 → 지우기
+        clear_act = QAction("지우기", self)
+        clear_act.triggered.connect(self.clear_recent)
+        self.recent_menu.addAction(clear_act)
+
+    def _open_recent_folder(self, dir_path: str):
+        if not dir_path or not os.path.isdir(dir_path):
+            self.statusBar().showMessage("폴더가 존재하지 않습니다.", 3000)
+            # 존재하지 않는 항목은 목록에서 제거
+            self.recent_folders = [it for it in self.recent_folders if self._normalize_path(it.get("path","")) != self._normalize_path(dir_path)]
+            self.save_settings()
+            self.rebuild_recent_menu()
+            return
+        self.scan_directory(dir_path)
+        if 0 <= self.current_image_index < len(self.image_files_in_dir):
+            self.load_image(self.image_files_in_dir[self.current_image_index])
+        else:
+            self.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
+
+    def clear_recent(self):
+        self.recent_files = []
+        self.recent_folders = []
+        self.save_settings()
+        self.rebuild_recent_menu()
 
     # Drag & Drop 지원: 유틸
     def _is_supported_image(self, path: str) -> bool:
@@ -197,7 +297,12 @@ class JusawiViewer(QMainWindow):
             return
         self.image_files_in_dir = clean_files
         self.current_image_index = 0
-        self.load_image(self.image_files_in_dir[self.current_image_index])
+        self.load_image(self.image_files_in_dir[self.current_image_index], source='drop')
+        # 최근 파일 갱신 제거
+        try:
+            pass
+        except Exception:
+            pass
 
     def _handle_dropped_folders(self, folders):
         if not folders:
@@ -209,6 +314,11 @@ class JusawiViewer(QMainWindow):
             self.load_image(self.image_files_in_dir[self.current_image_index])
         else:
             self.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
+        # 최근 폴더 업데이트 제거
+        try:
+            pass
+        except Exception:
+            pass
 
     # Drag & Drop 이벤트 핸들러
     def dragEnterEvent(self, event):
@@ -317,6 +427,59 @@ class JusawiViewer(QMainWindow):
         self._last_cursor_x = x
         self._last_cursor_y = y
         self.update_status_right()
+
+    # 세션 저장/복원
+    def save_last_session(self):
+        try:
+            last = {
+                "file_path": self.current_image_path or "",
+                "dir_path": os.path.dirname(self.current_image_path) if self.current_image_path else "",
+                "view_mode": getattr(self.image_display_area, "_view_mode", self._last_view_mode),
+                "scale": float(self._last_scale or 1.0),
+                "fullscreen": bool(self.is_fullscreen),
+                "window_geometry": self.saveGeometry(),
+            }
+            self.settings.setValue("session/last", last)
+            self.save_settings()
+        except Exception:
+            pass
+
+    def restore_last_session(self):
+        try:
+            last = self.settings.value("session/last", {}, dict)
+            if not isinstance(last, dict):
+                return
+            fpath = last.get("file_path") or ""
+            dpath = last.get("dir_path") or ""
+            vmode = last.get("view_mode") or 'fit'
+            scale = float(last.get("scale") or 1.0)
+            if fpath and os.path.isfile(fpath):
+                self.load_image(fpath, source='restore')
+            elif dpath and os.path.isdir(dpath):
+                self.scan_directory(dpath)
+                if 0 <= self.current_image_index < len(self.image_files_in_dir):
+                    self.load_image(self.image_files_in_dir[self.current_image_index], source='restore')
+            # 보기 모드/배율 적용
+            if vmode == 'fit':
+                self.image_display_area.fit_to_window()
+            elif vmode == 'fit_width':
+                self.image_display_area.fit_to_width()
+            elif vmode == 'fit_height':
+                self.image_display_area.fit_to_height()
+            elif vmode == 'actual':
+                self.image_display_area.reset_to_100()
+            # scale은 free 모드에서만 유효
+            if vmode == 'free' and self.image_display_area:
+                self.image_display_area.set_absolute_scale(scale)
+            # 창 지오메트리 복원
+            try:
+                geom = last.get("window_geometry")
+                if geom:
+                    self.restoreGeometry(geom)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def reset_zoom(self, fit=True):
         self.fit_mode = bool(fit)
@@ -513,7 +676,7 @@ class JusawiViewer(QMainWindow):
                     
                     # 새로운 이미지 로드
                     if self.current_image_index >= 0:
-                        self.load_image(self.image_files_in_dir[self.current_image_index])
+                        self.load_image(self.image_files_in_dir[self.current_image_index], source='nav')
                     else:
                         # 이미지가 없으면 화면 클리어
                         self.clear_display()
@@ -618,11 +781,19 @@ class JusawiViewer(QMainWindow):
         self.update_status_right()
 
     def open_file(self):
-        file_path = open_file_dialog_util(self)
+        file_path = open_file_dialog_util(self, getattr(self, "last_open_dir", ""))
         if file_path:
-            self.load_image(file_path)
+            success = self.load_image(file_path, source='open')
+            if success:
+                try:
+                    parent_dir = os.path.dirname(file_path)
+                    if parent_dir and os.path.isdir(parent_dir):
+                        self.last_open_dir = parent_dir
+                        self.save_settings()
+                except Exception:
+                    pass
 
-    def load_image(self, file_path):
+    def load_image(self, file_path, source='other'):
         loaded_path, success = load_image_util(file_path, self.image_display_area)
         self.load_successful = success
         if not success:
@@ -641,6 +812,17 @@ class JusawiViewer(QMainWindow):
         # 상태바 갱신
         self.update_status_left()
         self.update_status_right()
+        # 최근 파일 업데이트: 오직 'open' 경로에서만
+        if success and source in ('open', 'drop'):
+            try:
+                self.recent_files = self._update_mru(self.recent_files, loaded_path)
+                parent_dir = os.path.dirname(loaded_path)
+                if parent_dir and os.path.isdir(parent_dir):
+                    self.last_open_dir = parent_dir
+                self.save_settings()
+                self.rebuild_recent_menu()
+            except Exception:
+                pass
         return success
 
     def scan_directory(self, dir_path):
@@ -660,7 +842,7 @@ class JusawiViewer(QMainWindow):
 
     def load_image_at_current_index(self):
         if 0 <= self.current_image_index < len(self.image_files_in_dir):
-            self.load_image(self.image_files_in_dir[self.current_image_index])
+            self.load_image(self.image_files_in_dir[self.current_image_index], source='nav')
 
     def update_button_states(self):
         num_images = len(self.image_files_in_dir)
@@ -718,3 +900,10 @@ class JusawiViewer(QMainWindow):
             event.acceptProposedAction()
             return True
         return super().eventFilter(obj, event)
+
+    def closeEvent(self, event):
+        try:
+            self.save_last_session()
+        except Exception:
+            pass
+        super().closeEvent(event)

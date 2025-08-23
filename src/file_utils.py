@@ -27,9 +27,10 @@ def windows_style_sort_key(item1, item2):
     if item1 > item2: return 1
     return 0
 
-def open_file_dialog_util(parent_widget):
+def open_file_dialog_util(parent_widget, initial_dir=None):
     file_filter = f"사진 ({' '.join(['*' + ext for ext in SUPPORTED_FORMATS])})"
-    file_path, _ = QFileDialog.getOpenFileName(parent_widget, "사진 파일 열기", "", file_filter)
+    start_dir = initial_dir if (initial_dir and os.path.isdir(initial_dir)) else ""
+    file_path, _ = QFileDialog.getOpenFileName(parent_widget, "사진 파일 열기", start_dir, file_filter)
     return file_path
 
 def load_image_util(file_path, image_display_area):
