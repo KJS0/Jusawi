@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QFrame
-from PyQt6.QtGui import QPixmap, QTransform, QPainter
+from PyQt6.QtGui import QPixmap, QTransform, QPainter, QCursor, QColor, QBrush
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPointF
 
 class ImageView(QGraphicsView):
@@ -20,7 +20,7 @@ class ImageView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setBackgroundBrush(Qt.GlobalColor.darkGray)
+        self.setBackgroundBrush(QBrush(QColor("#373737")))
         self.setMouseTracking(True)
         # 프레임 라인 제거 및 항상 기본 화살표 커서 유지
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -51,6 +51,10 @@ class ImageView(QGraphicsView):
             self.resetTransform()
             self._current_scale = 1.0
         self.scaleChanged.emit(self._current_scale)
+        # 새 이미지가 설정되면, 현재 마우스 포인터가 가리키는 이미지 좌표를 즉시 갱신
+        if self._pix_item and self._original_pixmap:
+            vp_point = self.viewport().mapFromGlobal(QCursor.pos())
+            self._emit_cursor_pos_at_viewport_point(QPointF(vp_point))
 
     def originalPixmap(self) -> QPixmap | None:
         return self._original_pixmap

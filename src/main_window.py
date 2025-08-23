@@ -1,8 +1,8 @@
 import os
 import sys
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy
 from PyQt6.QtCore import QTimer, Qt, QEvent
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut, QImage
 
 from .image_view import ImageView
 from .file_utils import open_file_dialog_util, load_image_util, scan_directory_util
@@ -36,6 +36,8 @@ class JusawiViewer(QMainWindow):
         # QMainWindow의 중앙 위젯 설정
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
+        # 중앙 영역 배경을 #373737로 통일
+        central_widget.setStyleSheet("background-color: #373737;")
         
         self.main_layout = QVBoxLayout(central_widget)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
@@ -69,6 +71,20 @@ class JusawiViewer(QMainWindow):
         self.zoom_in_button = QPushButton("확대")
         self.zoom_in_button.clicked.connect(self.zoom_in)
 
+        # 상단 버튼 텍스트 색 적용 및 창 크기에 비례하지 않도록 고정 크기 정책 설정
+        button_style = "color: #EAEAEA;"
+        for btn in [
+            self.open_button,
+            self.fullscreen_button,
+            self.prev_button,
+            self.next_button,
+            self.zoom_out_button,
+            self.fit_button,
+            self.zoom_in_button,
+        ]:
+            btn.setStyleSheet(button_style)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
         # 버튼 순서: 열기 전체화면 이전 다음 축소 100% 확대
         self.button_layout.addWidget(self.open_button)
         self.button_layout.addWidget(self.fullscreen_button)
@@ -77,15 +93,29 @@ class JusawiViewer(QMainWindow):
         self.button_layout.addWidget(self.zoom_out_button)
         self.button_layout.addWidget(self.fit_button)
         self.button_layout.addWidget(self.zoom_in_button)
+        # 남는 공간을 스트레치로 채워 버튼이 확장되지 않도록 함
+        self.button_layout.addStretch(1)
 
-        self.main_layout.insertLayout(0, self.button_layout)
+        # 버튼 바 컨테이너(투명 배경 유지)
+        self.button_bar = QWidget()
+        self.button_bar.setStyleSheet("background-color: transparent; QPushButton { color: #EAEAEA; }")
+        self.button_bar.setLayout(self.button_layout)
+        self.main_layout.insertWidget(0, self.button_bar)
 
         # 상태바: 좌측/우측 구성
         self.status_left_label = QLabel("", self)
         self.status_right_label = QLabel("", self)
+        self.status_left_label.setStyleSheet("color: #EAEAEA;")
+        self.status_right_label.setStyleSheet("color: #EAEAEA;")
         # 좌측: addWidget, 우측: addPermanentWidget
         self.statusBar().addWidget(self.status_left_label, 1)
         self.statusBar().addPermanentWidget(self.status_right_label)
+        # 상태바 배경/경계/텍스트 색상 통일 및 가독성 향상
+        self.statusBar().setStyleSheet(
+            "QStatusBar { background-color: #373737; border-top: 1px solid #373737; color: #EAEAEA; } "
+            "QStatusBar QLabel { color: #EAEAEA; } "
+            "QStatusBar::item { border: 0px; }"
+        )
         self.update_status_left()
         self.update_status_right()
 
@@ -114,6 +144,29 @@ class JusawiViewer(QMainWindow):
             return f"{int(b)} {units[i]}"
         return f"{b:.2f} {units[i]}"
 
+    def compute_display_bit_depth(self, img: QImage) -> int:
+        try:
+            fmt = img.format()
+            if fmt in (QImage.Format.Format_RGB888, QImage.Format.Format_BGR888):
+                return 24
+            if fmt in (QImage.Format.Format_Grayscale8, QImage.Format.Format_Indexed8):
+                return 8
+            if fmt in (QImage.Format.Format_Mono, QImage.Format.Format_MonoLSB):
+                return 1
+            if fmt in (QImage.Format.Format_Grayscale16,):
+                return 16
+            if fmt in (QImage.Format.Format_RGBA64, QImage.Format.Format_RGBX64):
+                return 64 if img.hasAlphaChannel() else 48
+            d = img.depth()
+            if d == 32 and not img.hasAlphaChannel():
+                return 24
+            return d
+        except Exception:
+            try:
+                return img.depth()
+            except Exception:
+                return 0
+
     def update_status_left(self):
         if not self.load_successful or not self.current_image_path:
             self.status_left_label.setText("")
@@ -135,7 +188,8 @@ class JusawiViewer(QMainWindow):
             w = pix.width()
             h = pix.height()
             try:
-                depth = pix.toImage().depth()
+                img = pix.toImage()
+                depth = self.compute_display_bit_depth(img)
             except Exception:
                 depth = 0
         dims = f"{w}*{h}*{depth}"
@@ -230,11 +284,9 @@ class JusawiViewer(QMainWindow):
         
         self.is_fullscreen = True
         
-        # 버튼 레이아웃 먼저 숨기기
-        for i in range(self.button_layout.count()):
-            widget = self.button_layout.itemAt(i).widget()
-            if widget:
-                widget.hide()
+        # 버튼 바 컨테이너 숨김
+        if hasattr(self, 'button_bar') and self.button_bar:
+            self.button_bar.hide()
         
         # 상태바 숨김
         self.statusBar().hide()
@@ -267,10 +319,8 @@ class JusawiViewer(QMainWindow):
                 QTimer.singleShot(10, lambda: self.setGeometry(self.previous_window_state['geometry']))
         
         # 버튼 레이아웃 다시 표시
-        for i in range(self.button_layout.count()):
-            widget = self.button_layout.itemAt(i).widget()
-            if widget:
-                widget.show()
+        if hasattr(self, 'button_bar') and self.button_bar:
+            self.button_bar.show()
         
         # 상태바 표시
         self.statusBar().show()
