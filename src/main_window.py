@@ -1,11 +1,11 @@
 import os
 import sys
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy
-from PyQt6.QtCore import QTimer, Qt, QEvent
+from PyQt6.QtCore import QTimer, Qt, QEvent, QUrl
 from PyQt6.QtGui import QKeySequence, QShortcut, QImage
 
 from .image_view import ImageView
-from .file_utils import open_file_dialog_util, load_image_util, scan_directory_util
+from .file_utils import open_file_dialog_util, load_image_util, scan_directory_util, SUPPORTED_FORMATS
 
 class JusawiViewer(QMainWindow):
     def __init__(self):
@@ -38,7 +38,11 @@ class JusawiViewer(QMainWindow):
         self.setCentralWidget(central_widget)
         # 중앙 영역 배경을 #373737로 통일
         central_widget.setStyleSheet("background-color: #373737;")
-        
+        # Drag & Drop 허용 (초기 상태 포함 창 어디서나 동작하도록 중앙/뷰포트에도 적용)
+        self.setAcceptDrops(True)
+        central_widget.setAcceptDrops(True)
+        central_widget.installEventFilter(self)
+
         self.main_layout = QVBoxLayout(central_widget)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self._normal_margins = (5, 5, 5, 5)
@@ -49,6 +53,14 @@ class JusawiViewer(QMainWindow):
         self.image_display_area.cursorPosChanged.connect(self.on_cursor_pos_changed)
         # 명시적 min/max 스케일 설정
         self.image_display_area.set_min_max_scale(self.min_scale, self.max_scale)
+        # ImageView 및 내부 뷰포트에도 DnD 허용 및 필터 설치
+        self.image_display_area.setAcceptDrops(True)
+        try:
+            self.image_display_area.viewport().setAcceptDrops(True)
+            self.image_display_area.viewport().installEventFilter(self)
+        except Exception:
+            pass
+        self.image_display_area.installEventFilter(self)
         self.main_layout.addWidget(self.image_display_area, 1)
 
         self.button_layout = QHBoxLayout()
@@ -116,6 +128,16 @@ class JusawiViewer(QMainWindow):
             "QStatusBar QLabel { color: #EAEAEA; } "
             "QStatusBar::item { border: 0px; }"
         )
+        # 상태바도 DnD 허용 및 필터 설치
+        try:
+            self.statusBar().setAcceptDrops(True)
+            self.statusBar().installEventFilter(self)
+            self.status_left_label.setAcceptDrops(True)
+            self.status_left_label.installEventFilter(self)
+            self.status_right_label.setAcceptDrops(True)
+            self.status_right_label.installEventFilter(self)
+        except Exception:
+            pass
         self.update_status_left()
         self.update_status_right()
 
@@ -127,8 +149,96 @@ class JusawiViewer(QMainWindow):
         
         self.update_button_states()
 
+        # 전역 DnD 지원: 주요 위젯에 일괄 적용
+        self._setup_global_dnd()
+
     def clamp(self, value, min_v, max_v):
         return max(min_v, min(value, max_v))
+
+    def _enable_dnd_on(self, widget):
+        try:
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+        except Exception:
+            pass
+
+    def _setup_global_dnd(self):
+        widgets = [
+            self.centralWidget(),
+            self.button_bar,
+            self.open_button, self.fullscreen_button, self.prev_button, self.next_button,
+            self.zoom_out_button, self.fit_button, self.zoom_in_button,
+            self.image_display_area,
+            getattr(self.image_display_area, 'viewport', lambda: None)(),
+            self.statusBar(), self.status_left_label, self.status_right_label,
+        ]
+        for w in widgets:
+            if w:
+                self._enable_dnd_on(w)
+
+    # Drag & Drop 지원: 유틸
+    def _is_supported_image(self, path: str) -> bool:
+        try:
+            ext = os.path.splitext(path.lower())[1]
+            return ext in SUPPORTED_FORMATS
+        except Exception:
+            return False
+
+    def _handle_dropped_files(self, files):
+        # 드롭 순서 유지 + 중복 제거 + 확장자 필터
+        seen = set()
+        clean_files = []
+        for p in files:
+            if (p not in seen) and self._is_supported_image(p):
+                seen.add(p)
+                clean_files.append(p)
+        if not clean_files:
+            self.statusBar().showMessage("지원하는 이미지 파일이 없습니다.", 3000)
+            return
+        self.image_files_in_dir = clean_files
+        self.current_image_index = 0
+        self.load_image(self.image_files_in_dir[self.current_image_index])
+
+    def _handle_dropped_folders(self, folders):
+        if not folders:
+            self.statusBar().showMessage("폴더가 없습니다.", 3000)
+            return
+        dir_path = folders[0]
+        self.scan_directory(dir_path)
+        if 0 <= self.current_image_index < len(self.image_files_in_dir):
+            self.load_image(self.image_files_in_dir[self.current_image_index])
+        else:
+            self.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
+
+    # Drag & Drop 이벤트 핸들러
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if not urls:
+            event.ignore()
+            return
+        paths = []
+        for u in urls:
+            if isinstance(u, QUrl) and u.isLocalFile():
+                paths.append(u.toLocalFile())
+        if not paths:
+            event.ignore()
+            return
+        files = [p for p in paths if os.path.isfile(p)]
+        if files:
+            self._handle_dropped_files(files)
+        event.acceptProposedAction()
 
     def human_readable_size(self, size_bytes: int) -> str:
         try:
@@ -581,4 +691,30 @@ class JusawiViewer(QMainWindow):
 
     # QGraphicsView 기반을 사용하므로 별도 이벤트 필터 불필요
     def eventFilter(self, obj, event):
+        et = event.type()
+        if et in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            md = getattr(event, 'mimeData', None)
+            if md and event.mimeData().hasUrls():
+                event.acceptProposedAction()
+                return True
+            return False
+        if et == QEvent.Type.Drop:
+            md = getattr(event, 'mimeData', None)
+            if not (md and event.mimeData().hasUrls()):
+                return False
+            urls = event.mimeData().urls()
+            paths = []
+            for u in urls:
+                if isinstance(u, QUrl) and u.isLocalFile():
+                    paths.append(u.toLocalFile())
+            if not paths:
+                return False
+            files = [p for p in paths if os.path.isfile(p)]
+            if files:
+                self._handle_dropped_files(files)
+            else:
+                # 폴더 드롭은 비활성화
+                self.statusBar().showMessage("이미지 파일만 드래그하여 열 수 있습니다.", 3000)
+            event.acceptProposedAction()
+            return True
         return super().eventFilter(obj, event)

@@ -180,6 +180,13 @@ class ImageView(QGraphicsView):
             base = 1.2
         return base
 
+    def _dynamic_step_with_precision(self, precise: bool) -> float:
+        base = self._dynamic_step()
+        if precise:
+            # 정밀 확대: 증분을 줄여 더 미세하게
+            return 1.0 + (base - 1.0) * 0.4
+        return base
+
     def zoom_in(self):
         self._fit_mode = False
         self._view_mode = 'free'
@@ -236,16 +243,16 @@ class ImageView(QGraphicsView):
         ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
         if (not ctrl) or shift:
-            # Ctrl 단독이 아닌 경우(Shift 포함 포함) 스크롤/확대 모두 하지 않음
+            # Ctrl 단독이 아닌 경우(Shift 포함) 동작하지 않음
             event.accept()
             return
-        # Ctrl 단독일 때만 줌 수행
-        # 수동 줌 시작: 보기 모드를 free로 전환해 fit 재적용을 방지
+        # Ctrl 단독일 때만 줌 수행(기본 단계)
         self._view_mode = 'free'
+        base = self._dynamic_step()
         if event.angleDelta().y() > 0:
-            self.zoom_in()
+            self.zoom_step(base)
         else:
-            self.zoom_out()
+            self.zoom_step(1.0 / base)
         # emit cursor pos after zoom at current cursor
         self._emit_cursor_pos_at_viewport_point(event.position())
         event.accept()
