@@ -1,7 +1,7 @@
 import os
 from typing import Tuple, List
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QImage
+from PyQt6.QtGui import QImage, QImageReader
 
 from .file_utils import scan_directory_util
 
@@ -15,9 +15,9 @@ class _ImageWorker(QObject):
 
     def run(self):
         try:
-            img = QImage(self._path)
-            if img.isNull():
-                self.done.emit(self._path, QImage(), False, "이미지를 불러올 수 없습니다.")
+            img, ok, err = _read_qimage_with_exif_auto_transform(self._path)
+            if not ok:
+                self.done.emit(self._path, QImage(), False, err)
                 return
             self.done.emit(self._path, img, True, "")
         except Exception as e:
@@ -36,9 +36,9 @@ class ImageService(QObject):
         return scan_directory_util(dir_path, current_image_path)
 
     def load(self, path: str) -> Tuple[str, QImage | None, bool, str]:
-        img = QImage(path)
-        if img.isNull():
-            return path, None, False, "이미지를 불러올 수 없습니다."
+        img, ok, err = _read_qimage_with_exif_auto_transform(path)
+        if not ok:
+            return path, None, False, err
         return path, img, True, ""
 
     def load_async(self, path: str) -> None:
@@ -105,5 +105,15 @@ class ImageService(QObject):
                 except Exception:
                     pass
                 self._cleanup_thread()
+
+
+def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]:
+    reader = QImageReader(path)
+    # EXIF Orientation 등 자동 변환 활성화
+    reader.setAutoTransform(True)
+    img = reader.read()
+    if img.isNull():
+        return QImage(), False, reader.errorString() or "이미지를 불러올 수 없습니다."
+    return img, True, ""
 
 
