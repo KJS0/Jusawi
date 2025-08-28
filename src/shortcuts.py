@@ -24,6 +24,6 @@ def setup_shortcuts(viewer) -> None:
     QShortcut(QKeySequence("H"), viewer, viewer.fit_to_height)
     QShortcut(QKeySequence("1"), viewer, viewer.reset_to_100)
 
-    # 주의: Ctrl +/-/0 단축키는 제거됨
-
-
+    # 저장 단축키
+    QShortcut(QKeySequence("Ctrl+S"), viewer, viewer.save_current_image)
+    QShortcut(QKeySequence("Ctrl+Shift+S"), viewer, viewer.save_current_image_as)

@@ -38,6 +38,8 @@ def update_status_left(viewer) -> None:
 
 def update_status_right(viewer) -> None:
     percent = int(round(getattr(viewer, "_last_scale", 1.0) * 100))
-    viewer.status_right_label.setText(f"X:{getattr(viewer, '_last_cursor_x', 0)}, Y:{getattr(viewer, '_last_cursor_y', 0)} {percent}%")
+    viewer.status_right_label.setText(
+        f"X:{getattr(viewer, '_last_cursor_x', 0)}, Y:{getattr(viewer, '_last_cursor_y', 0)} {percent}%"
+    )
 
 

@@ -47,6 +47,14 @@ class JusawiViewer(QMainWindow):
         self._last_view_mode = 'fit'
         self._last_center = QPointF(0.0, 0.0)
 
+        # 편집/변환 상태
+        self._tf_rotation = 0  # 0/90/180/270
+        self._tf_flip_h = False
+        self._tf_flip_v = False
+        self._is_dirty = False
+        self._save_policy = 'ask'  # 'ask' | 'overwrite' | 'save_as'
+        self._jpeg_quality = 95
+
         # 설정 저장(QSettings)
         self.settings = QSettings("Jusawi", "Jusawi")
         self.recent_files = []  # list[dict]
@@ -143,6 +151,19 @@ class JusawiViewer(QMainWindow):
         self.button_bar.setStyleSheet("background-color: transparent; QPushButton { color: #EAEAEA; }")
         self.button_bar.setLayout(self.button_layout)
         self.main_layout.insertWidget(0, self.button_bar)
+
+        # 회전 버튼(좌/우 90°만) 추가
+        self.rotate_left_button = QPushButton("↶90°")
+        self.rotate_right_button = QPushButton("↷90°")
+        for btn, handler in [
+            (self.rotate_left_button, self.rotate_ccw_90),
+            (self.rotate_right_button, self.rotate_cw_90),
+        ]:
+            btn.clicked.connect(handler)
+            btn.setStyleSheet(button_style)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.button_layout.addWidget(self.rotate_left_button)
+        self.button_layout.addWidget(self.rotate_right_button)
 
         # 상태바: 좌측/우측 구성
         self.status_left_label = QLabel("", self)
@@ -348,6 +369,63 @@ class JusawiViewer(QMainWindow):
         """창 제목 업데이트"""
         ts_update_window_title(self, file_path)
 
+    # ----- 변환 상태 관리 -----
+    def _apply_transform_to_view(self):
+        try:
+            self.image_display_area.set_transform_state(self._tf_rotation, self._tf_flip_h, self._tf_flip_v)
+        except Exception:
+            pass
+        self.update_status_right()
+
+    def _mark_dirty(self, dirty: bool = True):
+        self._is_dirty = bool(dirty)
+        self.update_window_title(self.current_image_path)
+        self.update_status_right()
+
+    def get_transform_status_text(self) -> str:
+        parts = []
+        parts.append(f"{int(self._tf_rotation)}°")
+        if self._tf_flip_h:
+            parts.append("H")
+        if self._tf_flip_v:
+            parts.append("V")
+        return " ".join(parts)
+
+    def rotate_cw_90(self):
+        if not self.load_successful:
+            return
+        self._tf_rotation = (self._tf_rotation + 90) % 360
+        self._apply_transform_to_view()
+        self._mark_dirty(True)
+        # 화면 맞춤 모드일 경우 재-맞춤
+        if getattr(self.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+            self.image_display_area.apply_current_view_mode()
+
+    def rotate_ccw_90(self):
+        if not self.load_successful:
+            return
+        self._tf_rotation = (self._tf_rotation - 90) % 360
+        self._apply_transform_to_view()
+        self._mark_dirty(True)
+        if getattr(self.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+            self.image_display_area.apply_current_view_mode()
+
+    def rotate_180(self):
+        # 제거된 기능 (더 이상 사용하지 않음)
+        pass
+
+    def flip_horizontal(self):
+        # 제거된 기능 (더 이상 사용하지 않음)
+        pass
+
+    def flip_vertical(self):
+        # 제거된 기능 (더 이상 사용하지 않음)
+        pass
+
+    def reset_transform_state(self):
+        # 제거된 기능 (더 이상 사용하지 않음)
+        pass
+
     # ImageService 콜백/적용
     def _on_image_loaded(self, path: str, img: QImage, success: bool, error: str):
         # 현재는 동기 로딩만 사용하므로 호출되지 않음
@@ -366,6 +444,12 @@ class JusawiViewer(QMainWindow):
         self.update_button_states()
         self.update_status_left()
         self.update_status_right()
+        # 새 이미지 로드시 변환 상태 리셋
+        self._tf_rotation = 0
+        self._tf_flip_h = False
+        self._tf_flip_v = False
+        self._apply_transform_to_view()
+        self._mark_dirty(False)
         if source in ('open', 'drop'):
             try:
                 self.recent_files = update_mru(self.recent_files, path)
@@ -485,6 +569,10 @@ class JusawiViewer(QMainWindow):
                     pass
 
     def load_image(self, file_path, source='other'):
+        # Dirty 체크 후 정책 실행
+        if self._is_dirty and self.current_image_path and os.path.normcase(file_path) != os.path.normcase(self.current_image_path):
+            if not self._handle_dirty_before_action():
+                return False
         # 동기 로딩 경로
         path, img, success, _ = self.image_service.load(file_path)
         if success and img is not None:
@@ -499,6 +587,98 @@ class JusawiViewer(QMainWindow):
         self.update_button_states()
         self.update_status_left()
         self.update_status_right()
+        return False
+
+    # ----- 저장 흐름 -----
+    def save_current_image(self) -> bool:
+        if not self.load_successful or not self.current_image_path:
+            return False
+        # 변환이 없으면 저장 불필요
+        if self._tf_rotation == 0 and not self._tf_flip_h and not self._tf_flip_v:
+            return True
+        try:
+            pix = self.image_display_area.originalPixmap()
+            if not pix or pix.isNull():
+                return False
+            img = pix.toImage()
+            ok, err = self.image_service.save_with_transform(
+                img,
+                self.current_image_path,
+                self.current_image_path,
+                self._tf_rotation,
+                self._tf_flip_h,
+                self._tf_flip_v,
+                quality=self._jpeg_quality,
+            )
+            if not ok:
+                QMessageBox.critical(self, "저장 오류", err or "파일 저장에 실패했습니다.")
+                return False
+            # 저장 후 재로드 및 상태 리셋
+            self.load_image(self.current_image_path, source='save')
+            self._mark_dirty(False)
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "저장 오류", str(e))
+            return False
+
+    def save_current_image_as(self) -> bool:
+        if not self.load_successful or not self.current_image_path:
+            return False
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            start_dir = os.path.dirname(self.current_image_path) if self.current_image_path else ""
+            dest_path, _ = QFileDialog.getSaveFileName(self, "다른 이름으로 저장", start_dir)
+            if not dest_path:
+                return False
+            pix = self.image_display_area.originalPixmap()
+            if not pix or pix.isNull():
+                return False
+            img = pix.toImage()
+            ok, err = self.image_service.save_with_transform(
+                img,
+                self.current_image_path,
+                dest_path,
+                self._tf_rotation,
+                self._tf_flip_h,
+                self._tf_flip_v,
+                quality=self._jpeg_quality,
+            )
+            if not ok:
+                QMessageBox.critical(self, "저장 오류", err or "파일 저장에 실패했습니다.")
+                return False
+            # 저장 후 새 경로 로드 및 상태 리셋
+            self.load_image(dest_path, source='saveas')
+            self._mark_dirty(False)
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "저장 오류", str(e))
+            return False
+
+    def _handle_dirty_before_action(self) -> bool:
+        # 정책 적용
+        policy = getattr(self, "_save_policy", 'ask')
+        if policy == 'overwrite':
+            return self.save_current_image()
+        if policy == 'save_as':
+            return self.save_current_image_as()
+        # ask
+        box = QMessageBox(self)
+        box.setWindowTitle("변경 내용 저장")
+        box.setText("회전/뒤집기 변경 내용을 저장하시겠습니까?")
+        btn_save = box.addButton("저장", QMessageBox.ButtonRole.AcceptRole)
+        btn_save_as = box.addButton("다른 이름으로", QMessageBox.ButtonRole.ActionRole)
+        btn_discard = box.addButton("무시", QMessageBox.ButtonRole.DestructiveRole)
+        btn_cancel = box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == btn_save:
+            return self.save_current_image()
+        if clicked == btn_save_as:
+            return self.save_current_image_as()
+        if clicked == btn_discard:
+            # 변경 사항 폐기
+            return True
         return False
 
     def scan_directory(self, dir_path):

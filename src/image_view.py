@@ -12,6 +12,10 @@ class ImageView(QGraphicsView):
         self.setScene(self._scene)
         self._pix_item = None  # type: QGraphicsPixmapItem | None
         self._original_pixmap = None  # type: QPixmap | None
+        # Transform state (non-destructive view-only)
+        self._rotation_degrees = 0  # 0, 90, 180, 270
+        self._flip_horizontal = False
+        self._flip_vertical = False
 
         # View configuration
         self.setRenderHints(self.renderHints() |
@@ -43,10 +47,17 @@ class ImageView(QGraphicsView):
             self._pix_item = QGraphicsPixmapItem(pixmap)
             self._scene.addItem(self._pix_item)
             self._original_pixmap = pixmap
+            # Set origin to center for consistent rotate/flip behavior
+            try:
+                self._pix_item.setTransformOriginPoint(self._pix_item.boundingRect().center())
+            except Exception:
+                pass
             # 장면 경계를 이미지 크기로 설정하여 중앙 정렬 기준을 명확히 함
             self._scene.setSceneRect(self._pix_item.boundingRect())
             # 새 이미지 로드시 현재 보기 모드를 적용
             self.apply_current_view_mode()
+            # Reapply current transform state to the new item
+            self._apply_item_transform()
         else:
             self.resetTransform()
             self._current_scale = 1.0
@@ -72,7 +83,8 @@ class ImageView(QGraphicsView):
     def _apply_fit(self):
         if not self._pix_item or not self._original_pixmap:
             return
-        br = self._pix_item.boundingRect()
+        # 회전/뒤집기 이후 실제 화면에서 차지하는 경계로 맞춤
+        br = self._pix_item.sceneBoundingRect() if self._pix_item else None
         if br.isEmpty():
             return
         # fitInView sets transform internally; we reset first
@@ -86,7 +98,9 @@ class ImageView(QGraphicsView):
     def _apply_fit_width(self):
         if not self._pix_item or not self._original_pixmap:
             return
-        img_w = self._original_pixmap.width()
+        # 회전/뒤집기 반영 후의 가시 경계 폭
+        br = self._pix_item.sceneBoundingRect()
+        img_w = br.width()
         if img_w <= 0:
             return
         vp_w = max(1, self.viewport().width())
@@ -102,7 +116,8 @@ class ImageView(QGraphicsView):
     def _apply_fit_height(self):
         if not self._pix_item or not self._original_pixmap:
             return
-        img_h = self._original_pixmap.height()
+        br = self._pix_item.sceneBoundingRect()
+        img_h = br.height()
         if img_h <= 0:
             return
         vp_h = max(1, self.viewport().height())
@@ -226,8 +241,14 @@ class ImageView(QGraphicsView):
         if not self._pix_item or not self._original_pixmap:
             return
         scene_pos = self.mapToScene(int(vp_point.x()), int(vp_point.y()))
-        x = int(scene_pos.x())
-        y = int(scene_pos.y())
+        # Map to item-local (untransformed) coordinates so rotation/flip are accounted for
+        try:
+            item_pos = self._pix_item.mapFromScene(scene_pos)
+            x = int(item_pos.x())
+            y = int(item_pos.y())
+        except Exception:
+            x = int(scene_pos.x())
+            y = int(scene_pos.y())
         # Clamp to image bounds
         w = self._original_pixmap.width()
         h = self._original_pixmap.height()
@@ -285,3 +306,40 @@ class ImageView(QGraphicsView):
         else:
             self.reset_to_100()
         super().mouseDoubleClickEvent(event) 
+
+    # ----- Rotate/Flip (view-only non-destructive) -----
+    def set_transform_state(self, rotation_degrees: int, flip_horizontal: bool, flip_vertical: bool):
+        # normalize rotation to one of {0,90,180,270}
+        rot = int(rotation_degrees) % 360
+        if rot % 90 != 0:
+            # snap to nearest right angle
+            rot = (round(rot / 90.0) * 90) % 360
+        self._rotation_degrees = rot
+        self._flip_horizontal = bool(flip_horizontal)
+        self._flip_vertical = bool(flip_vertical)
+        self._apply_item_transform()
+
+    def reset_transform_state(self):
+        self._rotation_degrees = 0
+        self._flip_horizontal = False
+        self._flip_vertical = False
+        self._apply_item_transform()
+
+    def _apply_item_transform(self):
+        if not self._pix_item:
+            return
+        t = QTransform()
+        # Apply rotation first
+        if self._rotation_degrees:
+            t.rotate(self._rotation_degrees)
+        # Apply flips as scales around the origin (center was set as transform origin)
+        sx = -1.0 if self._flip_horizontal else 1.0
+        sy = -1.0 if self._flip_vertical else 1.0
+        if sx != 1.0 or sy != 1.0:
+            t.scale(sx, sy)
+        self._pix_item.setTransform(t)
+        # Update scene rect to new bounding rect after transform so fit modes work
+        try:
+            self._scene.setSceneRect(self._pix_item.sceneBoundingRect())
+        except Exception:
+            pass

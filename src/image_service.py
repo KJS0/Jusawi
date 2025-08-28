@@ -1,7 +1,7 @@
 import os
 from typing import Tuple, List
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QImageReader
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt
+from PyQt6.QtGui import QImage, QImageReader, QTransform
 
 from .file_utils import scan_directory_util
 
@@ -106,6 +106,25 @@ class ImageService(QObject):
                     pass
                 self._cleanup_thread()
 
+    def save_with_transform(self,
+                            img: QImage,
+                            src_path: str,
+                            dest_path: str,
+                            rotation_degrees: int,
+                            flip_horizontal: bool,
+                            flip_vertical: bool,
+                            quality: int = 95) -> tuple[bool, str]:
+        """
+        사용자 변환을 픽셀에 적용하여 저장. 저장 후 EXIF Orientation은 1로 간주(별도 설정 없음).
+        """
+        try:
+            rot = _normalize_rotation(rotation_degrees)
+            q = _sanitize_quality(quality)
+            transformed = _apply_transform(img, rot, bool(flip_horizontal), bool(flip_vertical))
+            return _save_qimage(transformed, dest_path, q)
+        except Exception as e:
+            return False, str(e)
+
 
 def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]:
     reader = QImageReader(path)
@@ -117,3 +136,58 @@ def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]
     return img, True, ""
 
 
+def _apply_transform(img: QImage, rotation_degrees: int, flip_h: bool, flip_v: bool) -> QImage:
+    try:
+        t = QTransform()
+        rot = int(rotation_degrees) % 360
+        if rot:
+            t.rotate(rot)
+        sx = -1.0 if flip_h else 1.0
+        sy = -1.0 if flip_v else 1.0
+        if sx != 1.0 or sy != 1.0:
+            t.scale(sx, sy)
+        # Smooth for quality; QImage handles bounds expansion automatically
+        return img.transformed(t, Qt.TransformationMode.SmoothTransformation)
+    except Exception:
+        return img
+
+
+def _guess_format_from_path(path: str) -> str:
+    try:
+        ext = os.path.splitext(path)[1].lower().lstrip('.')
+        if ext == 'jpg':
+            return 'JPEG'
+        if ext == 'tif':
+            return 'TIFF'
+        if ext:
+            return ext.upper()
+    except Exception:
+        pass
+    return ''
+
+
+def _save_qimage(img: QImage, dest_path: str, quality: int) -> tuple[bool, str]:
+    fmt = _guess_format_from_path(dest_path)
+    try:
+        # 품질은 JPEG 등에 적용. 포맷 추정 실패 시 Qt가 확장자로 추정
+        ok = img.save(dest_path, fmt if fmt else None, quality)
+        if not ok:
+            return False, "이미지를 저장할 수 없습니다."
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _normalize_rotation(rot: int) -> int:
+    rot = int(rot) % 360
+    if rot % 90 != 0:
+        rot = (round(rot / 90.0) * 90) % 360
+    return rot
+
+
+def _sanitize_quality(q: int) -> int:
+    try:
+        qi = int(q)
+        return 1 if qi < 1 else (100 if qi > 100 else qi)
+    except Exception:
+        return 95
