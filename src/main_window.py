@@ -18,6 +18,7 @@ from .navigation import show_prev_image as nav_show_prev_image, show_next_image 
 from .title_status import update_window_title as ts_update_window_title, update_status_left as ts_update_status_left, update_status_right as ts_update_status_right
 from .dnd_setup import setup_global_dnd as setup_global_dnd_ext, enable_dnd as enable_dnd_ext
 from .image_service import ImageService
+from .settings_dialog import SettingsDialog
 
 class JusawiViewer(QMainWindow):
     def __init__(self):
@@ -52,7 +53,7 @@ class JusawiViewer(QMainWindow):
         self._tf_flip_h = False
         self._tf_flip_v = False
         self._is_dirty = False
-        self._save_policy = 'ask'  # 'ask' | 'overwrite' | 'save_as'
+        self._save_policy = 'discard'  # 'discard' | 'ask' | 'overwrite' | 'save_as'
         self._jpeg_quality = 95
 
         # 설정 저장(QSettings)
@@ -103,6 +104,10 @@ class JusawiViewer(QMainWindow):
         self.recent_button = QPushButton("최근 파일")
         self.recent_button.setMenu(self.recent_menu)
 
+        # 설정 버튼
+        self.settings_button = QPushButton("설정")
+        self.settings_button.clicked.connect(self.open_settings_dialog)
+
         # 새로: 전체화면 버튼
         self.fullscreen_button = QPushButton("전체화면")
         self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
@@ -119,11 +124,18 @@ class JusawiViewer(QMainWindow):
         self.zoom_in_button = QPushButton("확대")
         self.zoom_in_button.clicked.connect(self.zoom_in)
 
+        # 회전 버튼(좌/우 90°만) 생성 (레이아웃에 추가하기 전에 생성해야 함)
+        self.rotate_left_button = QPushButton("↶90°")
+        self.rotate_right_button = QPushButton("↷90°")
+        self.rotate_left_button.clicked.connect(self.rotate_ccw_90)
+        self.rotate_right_button.clicked.connect(self.rotate_cw_90)
+
         # 상단 버튼 텍스트 색 적용 및 창 크기에 비례하지 않도록 고정 크기 정책 설정
         button_style = "color: #EAEAEA;"
         for btn in [
             self.open_button,
             self.recent_button,
+            self.settings_button,
             self.fullscreen_button,
             self.prev_button,
             self.next_button,
@@ -134,7 +146,7 @@ class JusawiViewer(QMainWindow):
             btn.setStyleSheet(button_style)
             btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
-        # 버튼 순서: 열기 최근 전체화면 이전 다음 축소 100% 확대
+        # 버튼 순서: 열기 최근 전체화면 이전 다음 축소 100% 확대 회전 좌/우 ... 설정(맨 오른쪽)
         self.button_layout.addWidget(self.open_button)
         self.button_layout.addWidget(self.recent_button)
         self.button_layout.addWidget(self.fullscreen_button)
@@ -143,8 +155,12 @@ class JusawiViewer(QMainWindow):
         self.button_layout.addWidget(self.zoom_out_button)
         self.button_layout.addWidget(self.fit_button)
         self.button_layout.addWidget(self.zoom_in_button)
-        # 남는 공간을 스트레치로 채워 버튼이 확장되지 않도록 함
+        # 회전 버튼(확대 바로 옆)
+        self.button_layout.addWidget(self.rotate_left_button)
+        self.button_layout.addWidget(self.rotate_right_button)
+        # 남는 공간을 스트레치로 채운 후 설정 버튼을 맨 오른쪽에 배치
         self.button_layout.addStretch(1)
+        self.button_layout.addWidget(self.settings_button)
 
         # 버튼 바 컨테이너(투명 배경 유지)
         self.button_bar = QWidget()
@@ -152,18 +168,7 @@ class JusawiViewer(QMainWindow):
         self.button_bar.setLayout(self.button_layout)
         self.main_layout.insertWidget(0, self.button_bar)
 
-        # 회전 버튼(좌/우 90°만) 추가
-        self.rotate_left_button = QPushButton("↶90°")
-        self.rotate_right_button = QPushButton("↷90°")
-        for btn, handler in [
-            (self.rotate_left_button, self.rotate_ccw_90),
-            (self.rotate_right_button, self.rotate_cw_90),
-        ]:
-            btn.clicked.connect(handler)
-            btn.setStyleSheet(button_style)
-            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.button_layout.addWidget(self.rotate_left_button)
-        self.button_layout.addWidget(self.rotate_right_button)
+        # 회전 버튼은 위에서 생성됨
 
         # 상태바: 좌측/우측 구성
         self.status_left_label = QLabel("", self)
@@ -210,6 +215,12 @@ class JusawiViewer(QMainWindow):
         self.load_settings()
         self.rebuild_recent_menu()
         self.restore_last_session()
+        # UI 환경 설정 적용
+        try:
+            self._apply_ui_theme_and_spacing()
+            self._preferred_view_mode = getattr(self, "_default_view_mode", 'fit')
+        except Exception:
+            self._preferred_view_mode = 'fit'
 
     def clamp(self, value, min_v, max_v):
         return max(min_v, min(value, max_v))
@@ -465,6 +476,80 @@ class JusawiViewer(QMainWindow):
         """키보드 단축키 설정"""
         setup_shortcuts_ext(self)
 
+    def _apply_ui_theme_and_spacing(self):
+        # 간격 적용
+        try:
+            m = getattr(self, "_ui_margins", (5, 5, 5, 5))
+            self.main_layout.setContentsMargins(int(m[0]), int(m[1]), int(m[2]), int(m[3]))
+            spacing = int(getattr(self, "_ui_spacing", 6))
+            self.main_layout.setSpacing(spacing)
+        except Exception:
+            pass
+        # 테마 적용
+        theme = getattr(self, "_theme", 'dark')
+        # 시스템 테마 추출 (가능한 경우), 기본은 다크
+        resolved = theme
+        if theme == 'system':
+            try:
+                # 기본 OS 외관을 간단히 감지 (Windows의 다크 모드 여부 탐지는 간소화)
+                # 실패 시 다크로 폴백
+                import os as _os
+                is_dark = True
+                resolved = 'dark' if is_dark else 'light'
+            except Exception:
+                resolved = 'dark'
+        if resolved == 'light':
+            bg = "#F0F0F0"
+            fg = "#222222"
+            bar_bg = "#E0E0E0"
+        else:
+            bg = "#373737"
+            fg = "#EAEAEA"
+            bar_bg = "#373737"
+        try:
+            self.centralWidget().setStyleSheet(f"background-color: {bg};")
+        except Exception:
+            pass
+        try:
+            # 버튼 색/배경 모두 테마에 맞게 갱신
+            button_style = f"color: {fg}; background-color: transparent;"
+            for btn in [
+                self.open_button,
+                self.recent_button,
+                self.fullscreen_button,
+                self.prev_button,
+                self.next_button,
+                self.zoom_out_button,
+                self.fit_button,
+                self.zoom_in_button,
+                self.rotate_left_button,
+                self.rotate_right_button,
+                self.settings_button,
+            ]:
+                btn.setStyleSheet(button_style)
+        except Exception:
+            pass
+        try:
+            self.statusBar().setStyleSheet(
+                f"QStatusBar {{ background-color: {bar_bg}; border-top: 1px solid {bar_bg}; color: {fg}; }} "
+                f"QStatusBar QLabel {{ color: {fg}; }} "
+                "QStatusBar::item { border: 0px; }"
+            )
+            self.status_left_label.setStyleSheet(f"color: {fg};")
+            self.status_right_label.setStyleSheet(f"color: {fg};")
+        except Exception:
+            pass
+        try:
+            # ImageView 배경도 테마에 맞추어 조정
+            if theme == 'light':
+                from PyQt6.QtGui import QColor, QBrush
+                self.image_display_area.setBackgroundBrush(QBrush(QColor("#F0F0F0")))
+            else:
+                from PyQt6.QtGui import QColor, QBrush
+                self.image_display_area.setBackgroundBrush(QBrush(QColor("#373737")))
+        except Exception:
+            pass
+
     def toggle_fullscreen(self):
         """전체화면 모드 토글"""
         if self.is_fullscreen:
@@ -656,7 +741,9 @@ class JusawiViewer(QMainWindow):
 
     def _handle_dirty_before_action(self) -> bool:
         # 정책 적용
-        policy = getattr(self, "_save_policy", 'ask')
+        policy = getattr(self, "_save_policy", 'discard')
+        if policy == 'discard':
+            return True
         if policy == 'overwrite':
             return self.save_current_image()
         if policy == 'save_as':
@@ -680,6 +767,21 @@ class JusawiViewer(QMainWindow):
             # 변경 사항 폐기
             return True
         return False
+
+    # ----- 설정 다이얼로그 -----
+    def open_settings_dialog(self):
+        dlg = SettingsDialog(self)
+        dlg.load_from_viewer(self)
+        if dlg.exec() == dlg.DialogCode.Accepted:
+            dlg.apply_to_viewer(self)
+            # 즉시 UI 반영 및 저장
+            try:
+                self._apply_ui_theme_and_spacing()
+            except Exception:
+                pass
+            # 기본 보기 모드는 업데이트하되, 현재 보기(줌/위치)는 변경하지 않음
+            self._preferred_view_mode = getattr(self, "_default_view_mode", 'fit')
+            self.save_settings()
 
     def scan_directory(self, dir_path):
         self.image_files_in_dir, self.current_image_index = self.image_service.scan_directory(dir_path, self.current_image_path)

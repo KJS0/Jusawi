@@ -43,15 +43,18 @@ def restore_last_session(viewer) -> None:
             except Exception:
                 pass
         # 보기 모드/배율 적용
-        if vmode == 'fit':
+        remember = getattr(viewer, "_remember_last_view_mode", True)
+        preferred = getattr(viewer, "_default_view_mode", 'fit')
+        mode_to_apply = vmode if remember else preferred
+        if mode_to_apply == 'fit':
             viewer.image_display_area.fit_to_window()
-        elif vmode == 'fit_width':
+        elif mode_to_apply == 'fit_width':
             viewer.image_display_area.fit_to_width()
-        elif vmode == 'fit_height':
+        elif mode_to_apply == 'fit_height':
             viewer.image_display_area.fit_to_height()
-        elif vmode == 'actual':
+        elif mode_to_apply == 'actual':
             viewer.image_display_area.reset_to_100()
-        if vmode == 'free' and viewer.image_display_area:
+        if remember and vmode == 'free' and viewer.image_display_area:
             viewer.image_display_area.set_absolute_scale(scale)
         try:
             geom = last.get("window_geometry")
