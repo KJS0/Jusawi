@@ -328,6 +328,17 @@ class ImageView(QGraphicsView):
     def _apply_item_transform(self):
         if not self._pix_item:
             return
+        # Preserve current view anchor for non-fit modes
+        preserve_anchor = self._view_mode not in ('fit', 'fit_width', 'fit_height')
+        item_anchor_point = None
+        if preserve_anchor:
+            try:
+                # Use viewport center as anchor
+                vp_center = self.viewport().rect().center()
+                scene_center = self.mapToScene(vp_center)
+                item_anchor_point = self._pix_item.mapFromScene(scene_center)
+            except Exception:
+                item_anchor_point = None
         t = QTransform()
         # Apply rotation first
         if self._rotation_degrees:
@@ -343,3 +354,10 @@ class ImageView(QGraphicsView):
             self._scene.setSceneRect(self._pix_item.sceneBoundingRect())
         except Exception:
             pass
+        # Re-center to keep the same anchor visible when preserving
+        if preserve_anchor and item_anchor_point is not None:
+            try:
+                new_scene_point = self._pix_item.mapToScene(item_anchor_point)
+                self.centerOn(new_scene_point)
+            except Exception:
+                pass

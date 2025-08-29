@@ -12,6 +12,7 @@ from .dnd_handlers import handle_dropped_files, urls_to_local_files
 from .fullscreen_controller import enter_fullscreen as fs_enter_fullscreen, exit_fullscreen as fs_exit_fullscreen
 from .menu_builder import rebuild_recent_menu as build_recent_menu
 from .shortcuts import setup_shortcuts as setup_shortcuts_ext
+from .shortcuts_manager import apply_shortcuts as apply_shortcuts_ext
 from .session_service import save_last_session as save_session_ext, restore_last_session as restore_session_ext
 from .settings_store import load_settings as load_settings_ext, save_settings as save_settings_ext
 from .navigation import show_prev_image as nav_show_prev_image, show_next_image as nav_show_next_image, load_image_at_current_index as nav_load_image_at_current_index, update_button_states as nav_update_button_states
@@ -19,6 +20,7 @@ from .title_status import update_window_title as ts_update_window_title, update_
 from .dnd_setup import setup_global_dnd as setup_global_dnd_ext, enable_dnd as enable_dnd_ext
 from .image_service import ImageService
 from .settings_dialog import SettingsDialog
+from .shortcuts_help_dialog import ShortcutsHelpDialog
 
 class JusawiViewer(QMainWindow):
     def __init__(self):
@@ -422,16 +424,31 @@ class JusawiViewer(QMainWindow):
             self.image_display_area.apply_current_view_mode()
 
     def rotate_180(self):
-        # 제거된 기능 (더 이상 사용하지 않음)
-        pass
+        if not self.load_successful:
+            return
+        self._tf_rotation = (self._tf_rotation + 180) % 360
+        self._apply_transform_to_view()
+        self._mark_dirty(True)
+        if getattr(self.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+            self.image_display_area.apply_current_view_mode()
 
     def flip_horizontal(self):
-        # 제거된 기능 (더 이상 사용하지 않음)
-        pass
+        if not self.load_successful:
+            return
+        self._tf_flip_h = not self._tf_flip_h
+        self._apply_transform_to_view()
+        self._mark_dirty(True)
+        if getattr(self.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+            self.image_display_area.apply_current_view_mode()
 
     def flip_vertical(self):
-        # 제거된 기능 (더 이상 사용하지 않음)
-        pass
+        if not self.load_successful:
+            return
+        self._tf_flip_v = not self._tf_flip_v
+        self._apply_transform_to_view()
+        self._mark_dirty(True)
+        if getattr(self.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+            self.image_display_area.apply_current_view_mode()
 
     def reset_transform_state(self):
         # 제거된 기능 (더 이상 사용하지 않음)
@@ -475,6 +492,11 @@ class JusawiViewer(QMainWindow):
     def setup_shortcuts(self):
         """키보드 단축키 설정"""
         setup_shortcuts_ext(self)
+        # 사용자 지정 키 매핑 적용(설정 변경 후에도 재호출 가능)
+        try:
+            apply_shortcuts_ext(self)
+        except Exception:
+            pass
 
     def _apply_ui_theme_and_spacing(self):
         # 간격 적용
@@ -491,11 +513,28 @@ class JusawiViewer(QMainWindow):
         resolved = theme
         if theme == 'system':
             try:
-                # 기본 OS 외관을 간단히 감지 (Windows의 다크 모드 여부 탐지는 간소화)
-                # 실패 시 다크로 폴백
-                import os as _os
-                is_dark = True
-                resolved = 'dark' if is_dark else 'light'
+                import sys as _sys
+                # Windows: 레지스트리 AppsUseLightTheme (0=dark, 1=light)
+                if _sys.platform == 'win32':
+                    try:
+                        import winreg
+                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                            r"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize") as k:
+                            val, _ = winreg.QueryValueEx(k, "AppsUseLightTheme")
+                            resolved = 'light' if int(val) == 1 else 'dark'
+                    except Exception:
+                        resolved = 'dark'
+                else:
+                    # 기타 OS: 현재 앱 팔레트의 윈도우 배경 밝기로 추정
+                    from PyQt6.QtWidgets import QApplication
+                    pal = QApplication.instance().palette() if QApplication.instance() else None
+                    if pal:
+                        c = pal.window().color()
+                        # ITU-R BT.601 luma approximation
+                        luma = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+                        resolved = 'light' if luma >= 127 else 'dark'
+                    else:
+                        resolved = 'dark'
             except Exception:
                 resolved = 'dark'
         if resolved == 'light':
@@ -540,13 +579,17 @@ class JusawiViewer(QMainWindow):
         except Exception:
             pass
         try:
-            # ImageView 배경도 테마에 맞추어 조정
-            if theme == 'light':
-                from PyQt6.QtGui import QColor, QBrush
+            # ImageView 배경도 테마에 맞추어 조정 (system 포함하여 resolved 사용)
+            from PyQt6.QtGui import QColor, QBrush
+            if resolved == 'light':
                 self.image_display_area.setBackgroundBrush(QBrush(QColor("#F0F0F0")))
             else:
-                from PyQt6.QtGui import QColor, QBrush
                 self.image_display_area.setBackgroundBrush(QBrush(QColor("#373737")))
+        except Exception:
+            pass
+        try:
+            # 버튼 바 스타일도 테마 색상에 맞추어 갱신
+            self.button_bar.setStyleSheet(f"background-color: transparent; QPushButton {{ color: {fg}; }}")
         except Exception:
             pass
 
@@ -770,7 +813,21 @@ class JusawiViewer(QMainWindow):
 
     # ----- 설정 다이얼로그 -----
     def open_settings_dialog(self):
+        # 이미 열린 설정창이 있으면 활성화만
+        if hasattr(self, "_settings_dialog") and self._settings_dialog and self._settings_dialog.isVisible():
+            try:
+                self._settings_dialog.raise_()
+                self._settings_dialog.activateWindow()
+                # 요청에 따라 단축키 탭 초점 이동도 지원
+                try:
+                    self._settings_dialog.focus_shortcuts_tab()
+                except Exception:
+                    pass
+                return
+            except Exception:
+                pass
         dlg = SettingsDialog(self)
+        self._settings_dialog = dlg
         dlg.load_from_viewer(self)
         if dlg.exec() == dlg.DialogCode.Accepted:
             dlg.apply_to_viewer(self)
@@ -781,7 +838,20 @@ class JusawiViewer(QMainWindow):
                 pass
             # 기본 보기 모드는 업데이트하되, 현재 보기(줌/위치)는 변경하지 않음
             self._preferred_view_mode = getattr(self, "_default_view_mode", 'fit')
+            # 단축키 설정 변경 가능성 반영
+            try:
+                apply_shortcuts_ext(self)
+            except Exception:
+                pass
             self.save_settings()
+        try:
+            self._settings_dialog = None
+        except Exception:
+            pass
+
+    def open_shortcuts_help(self):
+        dlg = ShortcutsHelpDialog(self)
+        dlg.exec()
 
     def scan_directory(self, dir_path):
         self.image_files_in_dir, self.current_image_index = self.image_service.scan_directory(dir_path, self.current_image_path)
