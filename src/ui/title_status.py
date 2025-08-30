@@ -1,5 +1,5 @@
 import os
-from .status_utils import human_readable_size, compute_display_bit_depth
+from ..utils.status_utils import human_readable_size, compute_display_bit_depth
 
 
 def update_window_title(viewer, file_path=None) -> None:

@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtCore import QUrl
 
-from .file_utils import SUPPORTED_FORMATS
+from ..utils.file_utils import SUPPORTED_FORMATS
 
 
 def _is_supported_image(path: str) -> bool:

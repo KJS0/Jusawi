@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QApplication
 from PyQt6.QtCore import Qt
-from .shortcuts_manager import COMMANDS, get_effective_keymap
+from ..shortcuts.shortcuts_manager import COMMANDS, get_effective_keymap
 
 
 class ShortcutsHelpDialog(QDialog):

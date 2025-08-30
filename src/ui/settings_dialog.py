@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import QKeySequenceEdit
-from .shortcuts_manager import COMMANDS, get_effective_keymap, save_custom_keymap
+from ..shortcuts.shortcuts_manager import COMMANDS, get_effective_keymap, save_custom_keymap
 
 
 class SettingsDialog(QDialog):
@@ -240,22 +240,27 @@ class SettingsDialog(QDialog):
         self.remember_check.setChecked(True)
         # 단축키 탭 기본값: 레지스트리의 default_keys로 되돌림(없으면 비움)
         # 테이블은 COMMANDS 순으로 채워져 있음
-        row = 0
-        for cmd in COMMANDS:
-            # 각 행에서 편집기 찾기
-            editor = self.keys_table.cellWidget(row, 3) if row < self.keys_table.rowCount() else None
-            if isinstance(editor, QKeySequenceEdit):
-                defaults = cmd.default_keys[:]
-                if defaults:
-                    editor.setKeySequence(QKeySequence(defaults[0]))
-                else:
-                    editor.setKeySequence(QKeySequence())
-            row += 1
+        if getattr(self, "_keys_ready", False) and hasattr(self, "keys_table"):
+            row = 0
+            for cmd in COMMANDS:
+                # 각 행에서 편집기 찾기
+                editor = self.keys_table.cellWidget(row, 3) if row < self.keys_table.rowCount() else None
+                if isinstance(editor, QKeySequenceEdit):
+                    defaults = cmd.default_keys[:]
+                    if defaults:
+                        editor.setKeySequence(QKeySequence(defaults[0]))
+                    else:
+                        editor.setKeySequence(QKeySequence())
+                row += 1
         self._reset_keys_to_defaults = True
 
     def _on_accept(self):
         # 적용 전에 유효성 검사 수행 후 통과하면 accept
         # viewer에 직접 접근하지 않고 저장할 매핑만 검증
+        if not self._reset_keys_to_defaults and not getattr(self, "_keys_ready", False):
+            # 키 탭이 초기화되지 않았다면 단축키 검증은 건너뜀
+            self.accept()
+            return
         mapping = self._collect_mapping_from_ui(validate_against_fixed=True)
         if mapping is None:
             return
@@ -385,18 +390,19 @@ class SettingsDialog(QDialog):
                 mapping[cmd.id] = cmd.default_keys[:1]
         else:
             mapping = {}
-            for row in range(self.keys_table.rowCount()):
-                editor = self.keys_table.cellWidget(row, 3)
-                if isinstance(editor, QKeySequenceEdit):
-                    cmd_id = getattr(editor, "_cmd_id", "")
-                    if not cmd_id:
-                        continue
-                    seq = editor.keySequence()
-                    if seq and not seq.isEmpty():
-                        # 단일 단축키만 허용
-                        mapping[cmd_id] = [seq.toString()]
-                    else:
-                        mapping[cmd_id] = []
+            if getattr(self, "_keys_ready", False) and hasattr(self, "keys_table"):
+                for row in range(self.keys_table.rowCount()):
+                    editor = self.keys_table.cellWidget(row, 3)
+                    if isinstance(editor, QKeySequenceEdit):
+                        cmd_id = getattr(editor, "_cmd_id", "")
+                        if not cmd_id:
+                            continue
+                        seq = editor.keySequence()
+                        if seq and not seq.isEmpty():
+                            # 단일 단축키만 허용
+                            mapping[cmd_id] = [seq.toString()]
+                        else:
+                            mapping[cmd_id] = []
 
         # 유효성 검사: 중복, 고정키 충돌, 예약키 금지
         if validate_against_fixed:
