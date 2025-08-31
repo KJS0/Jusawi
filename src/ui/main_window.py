@@ -97,6 +97,8 @@ class JusawiViewer(QMainWindow):
         # 이미지 서비스
         self.image_service = ImageService(self)
         self.image_service.loaded.connect(self._on_image_loaded)
+        # 프리로드 설정(다음/이전 1장씩)
+        self._preload_radius = 1
 
         self.button_layout = QHBoxLayout()
         self.open_button = QPushButton("열기")
@@ -484,6 +486,11 @@ class JusawiViewer(QMainWindow):
         self._tf_flip_v = False
         self._apply_transform_to_view()
         self._mark_dirty(False)
+        # 탐색 성능 향상: 이웃 이미지 프리로드
+        try:
+            self._preload_neighbors()
+        except Exception:
+            pass
         if source in ('open', 'drop'):
             try:
                 self.recent_files = update_mru(self.recent_files, path)
@@ -492,6 +499,30 @@ class JusawiViewer(QMainWindow):
                     self.last_open_dir = parent_dir
                 self.save_settings()
                 self.rebuild_recent_menu()
+            except Exception:
+                pass
+
+    def _preload_neighbors(self):
+        """현재 인덱스를 기준으로 다음/이전 이미지를 비동기로 미리 디코드.
+        ImageService 내부 QImage LRU 캐시에 저장되어, 다음 이동 시 즉시 히트 가능.
+        """
+        if not self.image_files_in_dir:
+            return
+        idx = self.current_image_index
+        if not (0 <= idx < len(self.image_files_in_dir)):
+            return
+        paths = []
+        for off in range(1, self._preload_radius + 1):
+            n = idx + off
+            p = idx - off
+            if 0 <= n < len(self.image_files_in_dir):
+                paths.append(self.image_files_in_dir[n])
+            if 0 <= p < len(self.image_files_in_dir):
+                paths.append(self.image_files_in_dir[p])
+        if paths:
+            try:
+                # 다음 우선도로 힌트(큰 의미는 없지만 관례상 0보다 낮은 값)
+                self.image_service.preload(paths, priority=-1)
             except Exception:
                 pass
 
