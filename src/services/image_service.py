@@ -3,7 +3,8 @@ from typing import Tuple, List
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QImageReader, QTransform
 
-from ..utils.file_utils import scan_directory_util
+from ..utils.file_utils import scan_directory_util, safe_write_bytes
+from .metadata_service import extract_metadata, encode_with_metadata
 
 
 class _ImageWorker(QObject):
@@ -115,13 +116,47 @@ class ImageService(QObject):
                             flip_vertical: bool,
                             quality: int = 95) -> tuple[bool, str]:
         """
-        사용자 변환을 픽셀에 적용하여 저장. 저장 후 EXIF Orientation은 1로 간주(별도 설정 없음).
+        안전 저장 + 메타데이터 보존.
+        - 픽셀에 변환 적용 후 Orientation=1로 정규화된 EXIF과 ICC/XMP 가능하면 유지
+        - 임시 파일에 기록 후 원자 교체(Windows: ReplaceFileW)
         """
         try:
             rot = _normalize_rotation(rotation_degrees)
             q = _sanitize_quality(quality)
             transformed = _apply_transform(img, rot, bool(flip_horizontal), bool(flip_vertical))
-            return _save_qimage(transformed, dest_path, q)
+
+            # Pillow로 인코딩하기 위해 QImage -> bytes (RGBA) 추출 후 PIL 로딩
+            from PIL import Image as PILImage  # type: ignore
+            import io
+
+            fmt = _guess_format_from_path(dest_path)
+            if not fmt:
+                fmt = 'JPEG'
+            # QImage를 RGBA 바이트로 변환
+            qt_format = QImage.Format.Format_RGBA8888
+            if transformed.format() != qt_format:
+                converted = transformed.convertToFormat(qt_format)
+            else:
+                converted = transformed
+            width = converted.width()
+            height = converted.height()
+            ptr = converted.bits()
+            ptr.setsize(converted.sizeInBytes())
+            raw = bytes(ptr)
+            pil_image = PILImage.frombytes('RGBA', (width, height), raw)
+            if fmt.upper() == 'JPEG':
+                pil_image = pil_image.convert('RGB')
+
+            # 메타데이터 추출/정규화
+            meta = extract_metadata(src_path)
+            ok, encoded_bytes, err = encode_with_metadata(pil_image, fmt, q, meta)
+            if not ok:
+                return False, err or "인코딩 실패"
+
+            ok2, err2 = safe_write_bytes(dest_path, encoded_bytes, write_through=True, retries=6)
+            if not ok2:
+                return False, err2 or "원자적 저장 실패"
+            return True, ""
         except Exception as e:
             return False, str(e)
 

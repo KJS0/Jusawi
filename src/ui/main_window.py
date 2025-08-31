@@ -1,11 +1,11 @@
 import os
 import sys
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu
-from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF
-from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu  # type: ignore[import]
+from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF  # type: ignore[import]
+from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap  # type: ignore[import]
 
 from .image_view import ImageView
-from ..utils.file_utils import open_file_dialog_util
+from ..utils.file_utils import open_file_dialog_util, cleanup_leftover_temp_and_backup
 from ..utils.delete_utils import move_to_trash_windows
 from ..storage.mru_store import normalize_path, update_mru
 from ..dnd.dnd_handlers import handle_dropped_files, urls_to_local_files
@@ -217,6 +217,12 @@ class JusawiViewer(QMainWindow):
         self.load_settings()
         self.rebuild_recent_menu()
         self.restore_last_session()
+        # 남은 임시/백업 파일 정리 (최근 폴더 기준, 실패 무시)
+        try:
+            if self.last_open_dir and os.path.isdir(self.last_open_dir):
+                cleanup_leftover_temp_and_backup(self.last_open_dir)
+        except Exception:
+            pass
         # UI 환경 설정 적용
         try:
             self._apply_ui_theme_and_spacing()
@@ -526,7 +532,7 @@ class JusawiViewer(QMainWindow):
                         resolved = 'dark'
                 else:
                     # 기타 OS: 현재 앱 팔레트의 윈도우 배경 밝기로 추정
-                    from PyQt6.QtWidgets import QApplication
+                    from PyQt6.QtWidgets import QApplication  # type: ignore[import]
                     pal = QApplication.instance().palette() if QApplication.instance() else None
                     if pal:
                         c = pal.window().color()
@@ -580,7 +586,7 @@ class JusawiViewer(QMainWindow):
             pass
         try:
             # ImageView 배경도 테마에 맞추어 조정 (system 포함하여 resolved 사용)
-            from PyQt6.QtGui import QColor, QBrush
+            from PyQt6.QtGui import QColor, QBrush  # type: ignore[import]
             if resolved == 'light':
                 self.image_display_area.setBackgroundBrush(QBrush(QColor("#F0F0F0")))
             else:
@@ -753,7 +759,7 @@ class JusawiViewer(QMainWindow):
         if not self.load_successful or not self.current_image_path:
             return False
         try:
-            from PyQt6.QtWidgets import QFileDialog
+            from PyQt6.QtWidgets import QFileDialog  # type: ignore[import]
             start_dir = os.path.dirname(self.current_image_path) if self.current_image_path else ""
             dest_path, _ = QFileDialog.getSaveFileName(self, "다른 이름으로 저장", start_dir)
             if not dest_path:
