@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QFrame
-from PyQt6.QtGui import QPixmap, QTransform, QPainter, QCursor, QColor, QBrush
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPointF
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QFrame  # type: ignore[import]
+from PyQt6.QtGui import QPixmap, QTransform, QPainter, QCursor, QColor, QBrush  # type: ignore[import]
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPointF  # type: ignore[import]
 
 class ImageView(QGraphicsView):
     scaleChanged = pyqtSignal(float)
@@ -38,6 +38,11 @@ class ImageView(QGraphicsView):
         # View mode: 'fit' | 'fit_width' | 'fit_height' | 'actual'
         self._view_mode = 'fit'
 
+        # 애니메이션 관련 상태(표시 전용) — 오버레이 제거에 따라 내부만 유지
+        self._is_animation = False
+        self._current_frame_index = 0
+        self._total_frames = -1  # 미상
+
     # API 호환: file_utils.load_image_util에서 setPixmap 호출을 사용
     def setPixmap(self, pixmap: QPixmap | None):
         self._scene.clear()
@@ -66,9 +71,27 @@ class ImageView(QGraphicsView):
         if self._pix_item and self._original_pixmap:
             vp_point = self.viewport().mapFromGlobal(QCursor.pos())
             self._emit_cursor_pos_at_viewport_point(QPointF(vp_point))
+        # 새 픽스맵 설정 후 오버레이 갱신
+        self.viewport().update()
 
     def originalPixmap(self) -> QPixmap | None:
         return self._original_pixmap
+
+    def updatePixmapFrame(self, pixmap: QPixmap | None) -> None:
+        """애니메이션 프레임 갱신: 장면을 초기화하지 않고 현재 항목의 픽스맵만 교체."""
+        try:
+            if self._pix_item and pixmap and not pixmap.isNull():
+                self._pix_item.setPixmap(pixmap)
+                self._original_pixmap = pixmap
+                # 프레임마다 크기가 달라질 수 있으므로 장면 경계 보정
+                try:
+                    self._scene.setSceneRect(self._pix_item.boundingRect())
+                except Exception:
+                    pass
+                if self._view_mode in ('fit', 'fit_width', 'fit_height'):
+                    self.apply_current_view_mode()
+        except Exception:
+            pass
 
     # Zoom/fitting
     def set_fit_mode(self, enabled: bool):
@@ -255,6 +278,15 @@ class ImageView(QGraphicsView):
         x = 0 if x < 0 else (w - 1 if x >= w else x)
         y = 0 if y < 0 else (h - 1 if y >= h else y)
         self.cursorPosChanged.emit(x, y)
+
+    # 애니메이션 상태 API (외부에서 설정)
+    def set_animation_state(self, is_animation: bool, current_index: int = 0, total_frames: int = -1):
+        self._is_animation = bool(is_animation)
+        self._current_frame_index = max(0, int(current_index))
+        self._total_frames = int(total_frames) if isinstance(total_frames, int) else -1
+        # 오버레이 제거: 별도 페인팅 없음
+
+    # paintEvent의 오버레이 렌더링 제거
 
     # Events
     def wheelEvent(self, event):

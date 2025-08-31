@@ -1,5 +1,5 @@
 import os
-from ..utils.status_utils import human_readable_size, compute_display_bit_depth
+from ..utils.status_utils import human_readable_size, compute_display_bit_depth, describe_colorspace
 
 
 def update_window_title(viewer, file_path=None) -> None:
@@ -33,7 +33,16 @@ def update_status_left(viewer) -> None:
         except Exception:
             depth = 0
     dims = f"{w}*{h}*{depth}"
-    viewer.status_left_label.setText(f"{idx_disp}/{total} {filename} {size_str} {dims}")
+    # 색공간 표기 추가: sRGB/기타/미상
+    cs = ""
+    try:
+        if pix and not pix.isNull():
+            img = pix.toImage()
+            cs = describe_colorspace(img)
+    except Exception:
+        cs = ""
+    cs_disp = f" [{cs}]" if cs else ""
+    viewer.status_left_label.setText(f"{idx_disp}/{total} {filename} {size_str} {dims}{cs_disp}")
 
 
 def update_status_right(viewer) -> None:

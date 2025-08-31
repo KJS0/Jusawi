@@ -1,5 +1,4 @@
-from PyQt6.QtGui import QImage
-
+from PyQt6.QtGui import QImage, QColorSpace  # type: ignore[import]
 
 def human_readable_size(size_bytes: int) -> str:
     try:
@@ -38,5 +37,28 @@ def compute_display_bit_depth(img: QImage) -> int:
             return img.depth()
         except Exception:
             return 0
+
+
+def describe_colorspace(img: QImage) -> str:
+    """간단한 색공간 설명 문자열(sRGB/기타/미상)."""
+    try:
+        cs = img.colorSpace()
+        if not cs.isValid():
+            return "unknown"
+        try:
+            if cs == QColorSpace(QColorSpace.NamedColorSpace.SRgb):
+                return "sRGB"
+        except Exception:
+            pass
+        # 기타인 경우 이름/primaries 정보가 있으면 간략화
+        try:
+            name = cs.description()
+            if name:
+                return name
+        except Exception:
+            pass
+        return "non-sRGB"
+    except Exception:
+        return "unknown"
 
 

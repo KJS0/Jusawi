@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 from PyQt6.QtWidgets import QFileDialog  # type: ignore[import]
 from PyQt6.QtGui import QPixmap  # type: ignore[import]
 
-SUPPORTED_FORMATS = [".jpeg", ".jpg", ".png", ".bmp", ".gif", ".tiff"]
+SUPPORTED_FORMATS = [".jpeg", ".jpg", ".png", ".bmp", ".gif", ".tiff", ".webp"]
 
 if sys.platform == "win32":  # Windows
     try:

@@ -2,7 +2,7 @@ import os
 import sys
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu  # type: ignore[import]
 from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF  # type: ignore[import]
-from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap  # type: ignore[import]
+from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap, QMovie, QColorSpace  # type: ignore[import]
 
 from .image_view import ImageView
 from ..utils.file_utils import open_file_dialog_util, cleanup_leftover_temp_and_backup
@@ -57,6 +57,14 @@ class JusawiViewer(QMainWindow):
         self._is_dirty = False
         self._save_policy = 'discard'  # 'discard' | 'ask' | 'overwrite' | 'save_as'
         self._jpeg_quality = 95
+        # 애니메이션 재생 상태
+        self._anim_is_playing = False
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(100)  # 기본 10fps
+        self._anim_timer.timeout.connect(self._on_anim_tick)
+        self._movie = None  # type: QMovie | None
+        # 옵션: QMovie 프레임도 sRGB로 변환(성능 비용 존재). 기본 활성화
+        self._convert_movie_frames_to_srgb = True
 
         # 설정 저장(QSettings)
         self.settings = QSettings("Jusawi", "Jusawi")
@@ -128,6 +136,8 @@ class JusawiViewer(QMainWindow):
         self.zoom_in_button = QPushButton("확대")
         self.zoom_in_button.clicked.connect(self.zoom_in)
 
+        # (요청) 애니메이션 제어 버튼 제거
+
         # 회전 버튼(좌/우 90°만) 생성 (레이아웃에 추가하기 전에 생성해야 함)
         self.rotate_left_button = QPushButton("↶90°")
         self.rotate_right_button = QPushButton("↷90°")
@@ -159,6 +169,7 @@ class JusawiViewer(QMainWindow):
         self.button_layout.addWidget(self.zoom_out_button)
         self.button_layout.addWidget(self.fit_button)
         self.button_layout.addWidget(self.zoom_in_button)
+        # (제거됨)
         # 회전 버튼(확대 바로 옆)
         self.button_layout.addWidget(self.rotate_left_button)
         self.button_layout.addWidget(self.rotate_right_button)
@@ -203,6 +214,13 @@ class JusawiViewer(QMainWindow):
 
         # 키보드 단축키 설정
         self.setup_shortcuts()
+        # (요청) 스페이스바로 애니메이션 재생/일시정지 토글
+        try:
+            self.anim_space_shortcut = QShortcut(QKeySequence("Space"), self)
+            self.anim_space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            self.anim_space_shortcut.activated.connect(self.anim_toggle_play)
+        except Exception:
+            pass
         
         # 이미지 라벨에 초기 포커스 설정
         self.image_display_area.setFocus()
@@ -336,6 +354,124 @@ class JusawiViewer(QMainWindow):
         self._last_cursor_x = x
         self._last_cursor_y = y
         self.update_status_right()
+
+    # ----- 애니메이션 컨트롤 -----
+    def _is_current_file_animation(self) -> bool:
+        try:
+            if not self.current_image_path:
+                return False
+            is_anim, _ = self.image_service.probe_animation(self.current_image_path)
+            return bool(is_anim)
+        except Exception:
+            return False
+
+    def anim_prev_frame(self):
+        if not self._is_current_file_animation():
+            return
+        try:
+            cur = getattr(self.image_display_area, "_current_frame_index", 0)
+            total = getattr(self.image_display_area, "_total_frames", -1)
+            new_index = max(0, cur - 1)
+            img, ok, err = self.image_service.load_frame(self.current_image_path, new_index)
+            if ok and img and not img.isNull():
+                self.image_display_area.setPixmap(QPixmap.fromImage(img))
+                self.image_display_area.set_animation_state(True, new_index, total)
+        except Exception:
+            pass
+
+    def anim_next_frame(self):
+        if not self._is_current_file_animation():
+            return
+        try:
+            cur = getattr(self.image_display_area, "_current_frame_index", 0)
+            total = getattr(self.image_display_area, "_total_frames", -1)
+            max_index = (total - 1) if isinstance(total, int) and total > 0 else (cur + 1)
+            new_index = min(max_index, cur + 1)
+            img, ok, err = self.image_service.load_frame(self.current_image_path, new_index)
+            if ok and img and not img.isNull():
+                self.image_display_area.setPixmap(QPixmap.fromImage(img))
+                self.image_display_area.set_animation_state(True, new_index, total)
+        except Exception:
+            pass
+
+    def anim_toggle_play(self):
+        if not self._is_current_file_animation():
+            return
+        try:
+            # QMovie 우선 사용
+            if self._movie:
+                if self._movie.state() == QMovie.MovieState.Running:
+                    self._movie.setPaused(True)
+                    self._anim_is_playing = False
+                elif self._movie.state() == QMovie.MovieState.Paused:
+                    self._movie.setPaused(False)
+                    self._anim_is_playing = True
+                else:
+                    self._movie.start()
+                    self._anim_is_playing = True
+            else:
+                # 폴백: 수동 타이머
+                self._anim_is_playing = not self._anim_is_playing
+                if self._anim_is_playing:
+                    self._anim_timer.start()
+                else:
+                    self._anim_timer.stop()
+        except Exception:
+            pass
+
+    def _on_anim_tick(self):
+        # QMovie 사용 중이면 타이머 경로는 비활성화
+        if getattr(self, "_movie", None):
+            return
+        if not self._is_current_file_animation():
+            self._anim_timer.stop()
+            self._anim_is_playing = False
+            return
+        try:
+            cur = getattr(self.image_display_area, "_current_frame_index", 0)
+            total = getattr(self.image_display_area, "_total_frames", -1)
+            # 서비스 캐시 기반으로 안전 래핑
+            if isinstance(total, int) and total > 1:
+                next_index = (cur + 1) % total
+            else:
+                # total 미상일 경우 서비스가 내부 래핑 처리
+                next_index = cur + 1
+            img, ok, err = self.image_service.load_frame(self.current_image_path, next_index)
+            if ok and img and not img.isNull():
+                # 프레임 교체는 경량 경로 사용
+                self.image_display_area.updatePixmapFrame(QPixmap.fromImage(img))
+                # total이 미상이면 probe로 갱신 시도
+                if not (isinstance(total, int) and total > 0):
+                    try:
+                        is_anim, fc = self.image_service.probe_animation(self.current_image_path)
+                        total = fc if (is_anim and isinstance(fc, int)) else -1
+                    except Exception:
+                        total = -1
+                self.image_display_area.set_animation_state(True, next_index, total)
+        except Exception:
+            pass
+
+    def _on_movie_frame(self, frame_index: int):
+        try:
+            if not self._movie:
+                return
+            pm = self._movie.currentPixmap()
+            if pm and not pm.isNull():
+                if getattr(self, "_convert_movie_frames_to_srgb", False):
+                    try:
+                        img = pm.toImage()
+                        cs = img.colorSpace()
+                        srgb = QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+                        if cs.isValid() and cs != srgb:
+                            img = img.convertToColorSpace(srgb)
+                        pm = QPixmap.fromImage(img)
+                    except Exception:
+                        pass
+                self.image_display_area.updatePixmapFrame(pm)
+                total = self._movie.frameCount()
+                self.image_display_area.set_animation_state(True, frame_index, total)
+        except Exception:
+            pass
 
     # 세션 저장/복원
     def save_last_session(self):
@@ -472,6 +608,52 @@ class JusawiViewer(QMainWindow):
     def _apply_loaded_image(self, path: str, img: QImage, source: str):
         pixmap = QPixmap.fromImage(img)
         self.image_display_area.setPixmap(pixmap)
+        # 기존 QMovie 정리
+        try:
+            if getattr(self, "_movie", None):
+                try:
+                    self._movie.stop()
+                except Exception:
+                    pass
+                self._movie.deleteLater()
+        except Exception:
+            pass
+        self._movie = None
+        # 애니메이션 여부/프레임 수를 탐지하여 상태 반영(기본: 정지)
+        try:
+            is_anim, frame_count = self.image_service.probe_animation(path)
+            self.image_display_area.set_animation_state(is_anim, current_index=0, total_frames=frame_count)
+            if is_anim:
+                try:
+                    mv = QMovie(path)
+                    mv.setCacheMode(QMovie.CacheMode.CacheAll)
+                    try:
+                        mv.jumpToFrame(0)
+                    except Exception:
+                        pass
+                    mv.frameChanged.connect(self._on_movie_frame)
+                    self._movie = mv
+                    # 자동 재생 활성화
+                    try:
+                        self._anim_timer.stop()
+                    except Exception:
+                        pass
+                    try:
+                        self._movie.start()
+                        self._anim_is_playing = True
+                    except Exception:
+                        self._anim_is_playing = False
+                except Exception:
+                    self._movie = None
+                    self._anim_is_playing = False
+            else:
+                # 비애니메이션 파일은 재생 상태 해제
+                self._anim_is_playing = False
+        except Exception:
+            try:
+                self.image_display_area.set_animation_state(False)
+            except Exception:
+                pass
         self.load_successful = True
         self.current_image_path = path
         self.update_window_title(path)

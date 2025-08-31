@@ -1,5 +1,5 @@
 import sys
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication  # type: ignore[import]
 from src.ui.main_window import JusawiViewer 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 import os
-from typing import Tuple, List, Callable, Optional, Any
+from typing import Tuple, List, Callable, Optional
 from collections import OrderedDict
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QRunnable, QThreadPool
-from PyQt6.QtGui import QImage, QImageReader, QTransform
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QRunnable, QThreadPool  # type: ignore[import]
+from PyQt6.QtGui import QImage, QImageReader, QTransform, QColorSpace  # type: ignore[import]
 
 from ..utils.file_utils import scan_directory_util, safe_write_bytes
 from .metadata_service import extract_metadata, encode_with_metadata
@@ -38,6 +38,8 @@ class ImageService(QObject):
         # 프리로드용 스레드풀 및 세대 토큰
         self._pool = QThreadPool.globalInstance()
         self._preload_generation = 0
+        # 애니메이션 정보 캐시: path -> frame_count(>1이면 애니메이션), -1 미상/계산 실패
+        self._anim_frame_count: dict[str, int] = {}
 
     def scan_directory(self, dir_path: str, current_image_path: str | None):
         return scan_directory_util(dir_path, current_image_path)
@@ -118,6 +120,105 @@ class ImageService(QObject):
                     pass
                 self._cleanup_thread()
 
+    # --- 애니메이션/프레임 관련 유틸 ---
+    def probe_animation(self, path: str) -> tuple[bool, int]:
+        """파일이 애니메이션인지 여부와 프레임 수(-1: 미상)를 반환. 캐시 사용."""
+        try:
+            # 캐시 우선
+            cached = self._anim_frame_count.get(path)
+            if isinstance(cached, int) and cached > 1:
+                return True, cached
+            reader = QImageReader(path)
+            is_anim = False
+            frame_count = -1
+            # 지원 여부 확인
+            try:
+                if hasattr(reader, 'supportsAnimation'):
+                    is_anim = bool(reader.supportsAnimation())
+            except Exception:
+                pass
+            # imageCount 시도(일부 포맷은 0 또는 1 반환)
+            try:
+                c = int(reader.imageCount())
+                if c > 1:
+                    frame_count = c
+                    is_anim = True
+            except Exception:
+                pass
+            # 확장자 힌트
+            if not is_anim:
+                ext = os.path.splitext(path)[1].lower()
+                if ext in ('.gif', '.webp'):
+                    is_anim = True
+            # 필요한 경우 프레임 수 직접 계수(한 번만)
+            if is_anim and (frame_count is None or frame_count <= 1):
+                try:
+                    # 처음부터 순회하여 카운트 추산
+                    count_reader = QImageReader(path)
+                    count_reader.setAutoTransform(True)
+                    count = 0
+                    # 첫 프레임 포함
+                    if not count_reader.read().isNull():
+                        count = 1
+                        while count_reader.jumpToNextImage():
+                            img = count_reader.read()
+                            if img.isNull():
+                                break
+                            count += 1
+                    frame_count = count if count > 1 else -1
+                except Exception:
+                    frame_count = -1
+            # 캐시 저장
+            if isinstance(frame_count, int):
+                self._anim_frame_count[path] = frame_count
+            return bool(is_anim), int(frame_count)
+        except Exception:
+            return False, -1
+
+    def load_frame(self, path: str, index: int) -> tuple[QImage | None, bool, str]:
+        """지정 프레임을 로드(색관리 포함). index는 0 기반."""
+        try:
+            # 인덱스 래핑(알고 있는 경우)
+            fc = self._anim_frame_count.get(path, -1)
+            if isinstance(fc, int) and fc > 0:
+                if index >= fc:
+                    index = index % fc
+                if index < 0:
+                    index = (index % fc + fc) % fc
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            # jumpToImage가 지원되면 직접 점프, 아니면 next로 순차 이동
+            moved = False
+            try:
+                if hasattr(reader, 'jumpToImage'):
+                    moved = bool(reader.jumpToImage(int(index)))
+                else:
+                    # 순차 이동 폴백
+                    cur = 0
+                    try:
+                        cur = int(reader.currentImageNumber())
+                    except Exception:
+                        cur = 0
+                    if index < cur:
+                        # 처음부터 다시 시작하는 것이 안전
+                        reader = QImageReader(path)
+                        reader.setAutoTransform(True)
+                        cur = 0
+                    while cur < index:
+                        if not reader.jumpToNextImage():
+                            break
+                        cur += 1
+                    moved = (cur == index)
+            except Exception:
+                moved = False
+            img = reader.read()
+            if img.isNull():
+                return None, False, reader.errorString() or "프레임을 불러올 수 없습니다."
+            img = _convert_to_srgb(img)
+            return img, True, ""
+        except Exception as e:
+            return None, False, str(e)
+
     # --- 프리로드/캐시 API ---
     def get_cached_image(self, path: str) -> Optional[QImage]:
         return self._img_cache.get(path)
@@ -180,7 +281,6 @@ class ImageService(QObject):
 
             # Pillow로 인코딩하기 위해 QImage -> bytes (RGBA) 추출 후 PIL 로딩
             from PIL import Image as PILImage  # type: ignore
-            import io
 
             fmt = _guess_format_from_path(dest_path)
             if not fmt:
@@ -221,7 +321,29 @@ def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]
     img = reader.read()
     if img.isNull():
         return QImage(), False, reader.errorString() or "이미지를 불러올 수 없습니다."
+    img = _convert_to_srgb(img)
     return img, True, ""
+
+
+def _convert_to_srgb(img: QImage) -> QImage:
+    """가능하면 sRGB로 변환하여 반환. 실패 시 원본 반환."""
+    try:
+        cs = img.colorSpace()
+        needs_convert = False
+        try:
+            if cs.isValid():
+                srgb = QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+                if cs != srgb:
+                    needs_convert = True
+        except Exception:
+            needs_convert = False
+        if needs_convert:
+            converted = img.convertToColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgb))
+            if not converted.isNull():
+                return converted
+        return img
+    except Exception:
+        return img
 
 
 def _apply_transform(img: QImage, rotation_degrees: int, flip_h: bool, flip_v: bool) -> QImage:
