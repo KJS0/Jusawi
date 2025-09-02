@@ -42,6 +42,10 @@ COMMANDS: List[Command] = [
     Command("flip_horizontal", "좌우 뒤집기", "수평 반전", "편집", "flip_horizontal", ["Shift+H"]),
     Command("flip_vertical", "상하 뒤집기", "수직 반전", "편집", "flip_vertical", ["Shift+V"]),
 
+    # 편집 히스토리
+    Command("undo", "실행 취소", "마지막 편집 취소", "편집", "undo_action", ["Ctrl+Z"]),
+    Command("redo", "다시 실행", "취소한 편집 다시 실행", "편집", "redo_action", ["Ctrl+Y", "Ctrl+Shift+Z"]),
+
     # 도움말(F1)은 고정
     Command("help_shortcuts", "단축키 도움말", "현재 단축키 표시", "도움말", "open_shortcuts_help", ["F1"], lock_key=True),
 ]

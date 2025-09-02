@@ -28,7 +28,7 @@ def enter_fullscreen(viewer):
 
     # 직접 전체화면으로 전환 (애니메이션 최소화)
     viewer.showFullScreen()
-    QTimer.singleShot(0, lambda: viewer.image_display_area.fit_to_window())
+    # 현재 줌/시점 유지: 별도 재중앙 호출 없음 (resizeEvent에서 앵커 보존)
 
 
 def exit_fullscreen(viewer):
@@ -60,6 +60,6 @@ def exit_fullscreen(viewer):
     viewer.image_display_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     viewer.image_display_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-    QTimer.singleShot(0, lambda: viewer.image_display_area.fit_to_window())
+    # 현재 줌/시점 유지: 별도 재중앙 호출 없음 (resizeEvent에서 앵커 보존)
 
 

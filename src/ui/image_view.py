@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QFrame  # type: ignore[import]
 from PyQt6.QtGui import QPixmap, QTransform, QPainter, QCursor, QColor, QBrush  # type: ignore[import]
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPointF  # type: ignore[import]
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPointF, QRectF  # type: ignore[import]
 
 class ImageView(QGraphicsView):
     scaleChanged = pyqtSignal(float)
@@ -29,6 +29,12 @@ class ImageView(QGraphicsView):
         # 프레임 라인 제거 및 항상 기본 화살표 커서 유지
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        # 휠 스크롤에 의한 뷰 스크롤 방지(줌 전용 UX 유지)
+        try:
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        except Exception:
+            pass
 
         # Zoom state
         self._current_scale = 1.0
@@ -42,6 +48,11 @@ class ImageView(QGraphicsView):
         self._is_animation = False
         self._current_frame_index = 0
         self._total_frames = -1  # 미상
+        # 소스 스케일 상태: 현재 픽스맵이 원본 대비 어느 배율로 생성되었는지(<=1.0)
+        self._source_scale = 1.0
+        # 원본(자연) 해상도 — 다운샘플 표시 중에도 좌표계 기준을 일관 유지하기 위함
+        self._natural_width = 0
+        self._natural_height = 0
 
     # API 호환: file_utils.load_image_util에서 setPixmap 호출을 사용
     def setPixmap(self, pixmap: QPixmap | None):
@@ -52,6 +63,14 @@ class ImageView(QGraphicsView):
             self._pix_item = QGraphicsPixmapItem(pixmap)
             self._scene.addItem(self._pix_item)
             self._original_pixmap = pixmap
+            # 새 픽스맵은 원본 해상도로 가정(외부에서 교체 시 set_source_scale로 보정)
+            self._source_scale = 1.0
+            try:
+                self._natural_width = int(max(0, pixmap.width()))
+                self._natural_height = int(max(0, pixmap.height()))
+            except Exception:
+                self._natural_width = pixmap.width()
+                self._natural_height = pixmap.height()
             # Set origin to center for consistent rotate/flip behavior
             try:
                 self._pix_item.setTransformOriginPoint(self._pix_item.boundingRect().center())
@@ -66,6 +85,8 @@ class ImageView(QGraphicsView):
         else:
             self.resetTransform()
             self._current_scale = 1.0
+            self._natural_width = 0
+            self._natural_height = 0
         self.scaleChanged.emit(self._current_scale)
         # 새 이미지가 설정되면, 현재 마우스 포인터가 가리키는 이미지 좌표를 즉시 갱신
         if self._pix_item and self._original_pixmap:
@@ -81,17 +102,59 @@ class ImageView(QGraphicsView):
         """애니메이션 프레임 갱신: 장면을 초기화하지 않고 현재 항목의 픽스맵만 교체."""
         try:
             if self._pix_item and pixmap and not pixmap.isNull():
+                # 현재 보기 모드가 자유 모드일 때 뷰포트 중심을 앵커로 유지
+                preserve_anchor = self._view_mode not in ('fit', 'fit_width', 'fit_height')
+                item_anchor_point = None
+                if preserve_anchor:
+                    try:
+                        vp_center = self.viewport().rect().center()
+                        scene_center = self.mapToScene(vp_center)
+                        item_anchor_point = self._pix_item.mapFromScene(scene_center)
+                    except Exception:
+                        item_anchor_point = None
+
                 self._pix_item.setPixmap(pixmap)
                 self._original_pixmap = pixmap
-                # 프레임마다 크기가 달라질 수 있으므로 장면 경계 보정
+                # 프레임 교체 시에도 소스 스케일은 외부에서 관리되므로 변경하지 않음
+
+                # 프레임 교체 후에도 변환 원점을 항상 center로 고정
                 try:
-                    self._scene.setSceneRect(self._pix_item.boundingRect())
+                    self._pix_item.setTransformOriginPoint(self._pix_item.boundingRect().center())
                 except Exception:
                     pass
+
+                # 프레임 크기 변경에 대응해 장면 경계 갱신
+                try:
+                    self._scene.setSceneRect(self._pix_item.sceneBoundingRect())
+                except Exception:
+                    pass
+
+                # 보기 모드 재적용 또는 앵커 보존 재중앙
                 if self._view_mode in ('fit', 'fit_width', 'fit_height'):
                     self.apply_current_view_mode()
+                elif preserve_anchor and item_anchor_point is not None:
+                    try:
+                        new_scene_point = self._pix_item.mapToScene(item_anchor_point)
+                        self.centerOn(new_scene_point)
+                    except Exception:
+                        pass
         except Exception:
             pass
+
+    # 소스 스케일을 외부(컨트롤러)에서 지정하여, 아이템 트랜스폼을 보정한다.
+    def set_source_scale(self, src_scale: float) -> None:
+        try:
+            s = float(src_scale)
+        except Exception:
+            s = 1.0
+        if s <= 0:
+            s = 1.0
+        self._source_scale = s
+        # 현재 뷰 스케일을 유지하되, 아이템 로컬 트랜스폼으로 1/src_scale 적용
+        self._apply_item_transform()
+        # 맞춤 모드에서는 즉시 재적용하여 뷰 스케일을 보정
+        if self._view_mode in ('fit', 'fit_width', 'fit_height'):
+            self.apply_current_view_mode()
 
     # Zoom/fitting
     def set_fit_mode(self, enabled: bool):
@@ -106,32 +169,72 @@ class ImageView(QGraphicsView):
     def _apply_fit(self):
         if not self._pix_item or not self._original_pixmap:
             return
-        # 회전/뒤집기 이후 실제 화면에서 차지하는 경계로 맞춤
-        br = self._pix_item.sceneBoundingRect() if self._pix_item else None
+        # 회전/뒤집기만 반영한 경계(소스 스케일 제외)
+        w = self._original_pixmap.width()
+        h = self._original_pixmap.height()
+        if w <= 0 or h <= 0:
+            return
+        t = QTransform()
+        if self._rotation_degrees:
+            t.rotate(self._rotation_degrees)
+        sx = -1.0 if self._flip_horizontal else 1.0
+        sy = -1.0 if self._flip_vertical else 1.0
+        if sx != 1.0 or sy != 1.0:
+            t.scale(sx, sy)
+        br = t.mapRect(QRectF(0, 0, w, h))
         if br.isEmpty():
             return
-        # fitInView sets transform internally; we reset first
+        vp = self.viewport().rect()
+        if vp.isEmpty():
+            return
+        vp_w = max(1.0, float(vp.width()))
+        vp_h = max(1.0, float(vp.height()))
+        s_w = vp_w / float(br.width())
+        s_h = vp_h / float(br.height())
+        desired = min(s_w, s_h)
+        # 소스 스케일 보정(아이템 트랜스폼에 1/src_scale가 들어가므로 나눠서 상쇄)
+        try:
+            src_scale = float(getattr(self, '_source_scale', 1.0) or 1.0)
+        except Exception:
+            src_scale = 1.0
+        effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
+        # 적용
         self.resetTransform()
-        self.fitInView(br, Qt.AspectRatioMode.KeepAspectRatio)
-        # Extract resulting uniform scale from transform
-        m = self.transform()
-        self._current_scale = m.m11()
+        t_view = QTransform()
+        t_view.scale(effective, effective)
+        self.setTransform(t_view)
+        self._current_scale = effective
         self.scaleChanged.emit(self._current_scale)
 
     def _apply_fit_width(self):
         if not self._pix_item or not self._original_pixmap:
             return
-        # 회전/뒤집기 반영 후의 가시 경계 폭
-        br = self._pix_item.sceneBoundingRect()
+        w = self._original_pixmap.width()
+        h = self._original_pixmap.height()
+        if w <= 0 or h <= 0:
+            return
+        t = QTransform()
+        if self._rotation_degrees:
+            t.rotate(self._rotation_degrees)
+        sx = -1.0 if self._flip_horizontal else 1.0
+        sy = -1.0 if self._flip_vertical else 1.0
+        if sx != 1.0 or sy != 1.0:
+            t.scale(sx, sy)
+        br = t.mapRect(QRectF(0, 0, w, h))
         img_w = br.width()
         if img_w <= 0:
             return
-        vp_w = max(1, self.viewport().width())
-        scale = vp_w / float(img_w)
-        clamped = self.clamp(scale, self._min_scale, self._max_scale)
-        t = QTransform()
-        t.scale(clamped, clamped)
-        self.setTransform(t)
+        vp_w = max(1.0, float(self.viewport().width()))
+        desired = vp_w / float(img_w)
+        try:
+            src_scale = float(getattr(self, '_source_scale', 1.0) or 1.0)
+        except Exception:
+            src_scale = 1.0
+        effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
+        clamped = self.clamp(effective, self._min_scale, self._max_scale)
+        t_view = QTransform()
+        t_view.scale(clamped, clamped)
+        self.setTransform(t_view)
         self._current_scale = clamped
         self.scaleChanged.emit(self._current_scale)
         self._center_view()
@@ -139,16 +242,32 @@ class ImageView(QGraphicsView):
     def _apply_fit_height(self):
         if not self._pix_item or not self._original_pixmap:
             return
-        br = self._pix_item.sceneBoundingRect()
+        w = self._original_pixmap.width()
+        h = self._original_pixmap.height()
+        if w <= 0 or h <= 0:
+            return
+        t = QTransform()
+        if self._rotation_degrees:
+            t.rotate(self._rotation_degrees)
+        sx = -1.0 if self._flip_horizontal else 1.0
+        sy = -1.0 if self._flip_vertical else 1.0
+        if sx != 1.0 or sy != 1.0:
+            t.scale(sx, sy)
+        br = t.mapRect(QRectF(0, 0, w, h))
         img_h = br.height()
         if img_h <= 0:
             return
-        vp_h = max(1, self.viewport().height())
-        scale = vp_h / float(img_h)
-        clamped = self.clamp(scale, self._min_scale, self._max_scale)
-        t = QTransform()
-        t.scale(clamped, clamped)
-        self.setTransform(t)
+        vp_h = max(1.0, float(self.viewport().height()))
+        desired = vp_h / float(img_h)
+        try:
+            src_scale = float(getattr(self, '_source_scale', 1.0) or 1.0)
+        except Exception:
+            src_scale = 1.0
+        effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
+        clamped = self.clamp(effective, self._min_scale, self._max_scale)
+        t_view = QTransform()
+        t_view.scale(clamped, clamped)
+        self.setTransform(t_view)
         self._current_scale = clamped
         self.scaleChanged.emit(self._current_scale)
         self._center_view()
@@ -267,14 +386,28 @@ class ImageView(QGraphicsView):
         # Map to item-local (untransformed) coordinates so rotation/flip are accounted for
         try:
             item_pos = self._pix_item.mapFromScene(scene_pos)
-            x = int(item_pos.x())
-            y = int(item_pos.y())
+            # item_pos는 현재 픽스맵 좌표계(다운샘플 기준)이므로, 원본 좌표계로 보정
+            try:
+                ss = float(getattr(self, '_source_scale', 1.0) or 1.0)
+            except Exception:
+                ss = 1.0
+            if ss > 0 and ss != 1.0:
+                x = int(round(item_pos.x() / ss))
+                y = int(round(item_pos.y() / ss))
+            else:
+                x = int(item_pos.x())
+                y = int(item_pos.y())
         except Exception:
             x = int(scene_pos.x())
             y = int(scene_pos.y())
         # Clamp to image bounds
-        w = self._original_pixmap.width()
-        h = self._original_pixmap.height()
+        # 자연 해상도로 클램프(다운샘플 표시 중에도 좌표계를 원본 기준으로 유지)
+        w = int(getattr(self, "_natural_width", 0) or 0)
+        h = int(getattr(self, "_natural_height", 0) or 0)
+        if w <= 0 or h <= 0:
+            # 폴백: 현재 픽스맵 크기
+            w = self._original_pixmap.width()
+            h = self._original_pixmap.height()
         x = 0 if x < 0 else (w - 1 if x >= w else x)
         y = 0 if y < 0 else (h - 1 if y >= h else y)
         self.cursorPosChanged.emit(x, y)
@@ -294,21 +427,20 @@ class ImageView(QGraphicsView):
             return super().wheelEvent(event)
         mods = event.modifiers()
         ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
-        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
-        if (not ctrl) or shift:
-            # Ctrl 단독이 아닌 경우(Shift 포함) 동작하지 않음
+        if ctrl:
+            # Ctrl 포함이면 항상 줌
+            self._view_mode = 'free'
+            base = self._dynamic_step()
+            if event.angleDelta().y() > 0:
+                self.zoom_step(base)
+            else:
+                self.zoom_step(1.0 / base)
+            # emit cursor pos after zoom at current cursor
+            self._emit_cursor_pos_at_viewport_point(event.position())
             event.accept()
             return
-        # Ctrl 단독일 때만 줌 수행(기본 단계)
-        self._view_mode = 'free'
-        base = self._dynamic_step()
-        if event.angleDelta().y() > 0:
-            self.zoom_step(base)
-        else:
-            self.zoom_step(1.0 / base)
-        # emit cursor pos after zoom at current cursor
-        self._emit_cursor_pos_at_viewport_point(event.position())
-        event.accept()
+        # Ctrl 미포함은 기본 스크롤 동작에 위임
+        return super().wheelEvent(event)
 
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
@@ -326,10 +458,32 @@ class ImageView(QGraphicsView):
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
 
     def resizeEvent(self, event):
-        super().resizeEvent(event)
-        # 현재 보기 모드를 유지하며 재적용
+        # fit 계열이면 항상 재-맞춤하여 화면 맞춤에서 벗어나지 않게 함
         if self._view_mode in ('fit', 'fit_width', 'fit_height'):
-            self.apply_current_view_mode()
+            super().resizeEvent(event)
+            try:
+                self.apply_current_view_mode()
+            except Exception:
+                pass
+            return
+        # 자유 줌: 앵커를 보존해 같은 지점을 중심으로 유지
+        item_anchor_point = None
+        cur_scale = self._current_scale
+        if self._pix_item:
+            try:
+                vp_center = self.viewport().rect().center()
+                scene_center = self.mapToScene(vp_center)
+                item_anchor_point = self._pix_item.mapFromScene(scene_center)
+            except Exception:
+                item_anchor_point = None
+        super().resizeEvent(event)
+        if self._pix_item and item_anchor_point is not None:
+            try:
+                self.set_absolute_scale(cur_scale)
+                new_scene_point = self._pix_item.mapToScene(item_anchor_point)
+                self.centerOn(new_scene_point)
+            except Exception:
+                pass
 
     def mouseDoubleClickEvent(self, event):
         # 더블클릭: 화면 맞춤 ↔ 실제 크기 토글
@@ -338,6 +492,23 @@ class ImageView(QGraphicsView):
         else:
             self.reset_to_100()
         super().mouseDoubleClickEvent(event) 
+
+    def keyPressEvent(self, event):
+        # 방향키/페이지/Home/End로 뷰가 스크롤되지 않도록 소비
+        key = event.key()
+        if key in (
+            Qt.Key.Key_Left,
+            Qt.Key.Key_Right,
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+            Qt.Key.Key_PageUp,
+            Qt.Key.Key_PageDown,
+            Qt.Key.Key_Home,
+            Qt.Key.Key_End,
+        ):
+            event.accept()
+            return
+        return super().keyPressEvent(event)
 
     # ----- Rotate/Flip (view-only non-destructive) -----
     def set_transform_state(self, rotation_degrees: int, flip_horizontal: bool, flip_vertical: bool):
@@ -380,6 +551,14 @@ class ImageView(QGraphicsView):
         sy = -1.0 if self._flip_vertical else 1.0
         if sx != 1.0 or sy != 1.0:
             t.scale(sx, sy)
+        # 소스 다운스케일이 적용된 픽스맵이면, 로컬에서 역스케일링하여 시각적 배율 일치
+        try:
+            ss = float(getattr(self, '_source_scale', 1.0) or 1.0)
+        except Exception:
+            ss = 1.0
+        if ss > 0 and ss != 1.0:
+            inv = 1.0 / ss
+            t.scale(inv, inv)
         self._pix_item.setTransform(t)
         # Update scene rect to new bounding rect after transform so fit modes work
         try:

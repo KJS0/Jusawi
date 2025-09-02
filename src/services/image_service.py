@@ -26,6 +26,89 @@ class _ImageWorker(QObject):
             self.done.emit(self._path, QImage(), False, str(e))
 
 
+class _CancellationToken(QObject):
+    def __init__(self):
+        super().__init__()
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled
+
+
+class _SaveWorker(QObject):
+    progress = pyqtSignal(int)
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, img: QImage, src_path: str, dest_path: str, rotation_degrees: int,
+                 flip_horizontal: bool, flip_vertical: bool, quality: int, token: _CancellationToken):
+        super().__init__()
+        self._img = img
+        self._src = src_path
+        self._dst = dest_path
+        self._rot = rotation_degrees
+        self._fh = flip_horizontal
+        self._fv = flip_vertical
+        self._q = quality
+        self._token = token
+
+    def run(self):
+        # 단계적 진행률 신호: 0->20 변환, 20->80 인코딩, 80->100 저장
+        try:
+            if self._token.is_cancelled():
+                self.done.emit(False, "작업이 취소되었습니다.")
+                return
+            self.progress.emit(10)
+            rot = _normalize_rotation(self._rot)
+            q = _sanitize_quality(self._q)
+            transformed = _apply_transform(self._img, rot, bool(self._fh), bool(self._fv))
+
+            if self._token.is_cancelled():
+                self.done.emit(False, "작업이 취소되었습니다.")
+                return
+            self.progress.emit(30)
+
+            from PIL import Image as PILImage  # type: ignore
+            fmt = _guess_format_from_path(self._dst) or 'JPEG'
+            qt_format = QImage.Format.Format_RGBA8888
+            converted = transformed if transformed.format() == qt_format else transformed.convertToFormat(qt_format)
+            width = converted.width()
+            height = converted.height()
+            ptr = converted.bits()
+            ptr.setsize(converted.sizeInBytes())
+            raw = bytes(ptr)
+            pil_image = PILImage.frombytes('RGBA', (width, height), raw)
+            if fmt.upper() == 'JPEG':
+                pil_image = pil_image.convert('RGB')
+
+            if self._token.is_cancelled():
+                self.done.emit(False, "작업이 취소되었습니다.")
+                return
+            self.progress.emit(60)
+
+            meta = extract_metadata(self._src)
+            ok, encoded_bytes, err = encode_with_metadata(pil_image, fmt, q, meta)
+            if not ok:
+                self.done.emit(False, err or "인코딩 실패")
+                return
+
+            if self._token.is_cancelled():
+                self.done.emit(False, "작업이 취소되었습니다.")
+                return
+            self.progress.emit(85)
+
+            ok2, err2 = safe_write_bytes(self._dst, encoded_bytes, write_through=True, retries=6)
+            if not ok2:
+                self.done.emit(False, err2 or "원자적 저장 실패")
+                return
+            self.progress.emit(100)
+            self.done.emit(True, "")
+        except Exception as e:
+            self.done.emit(False, str(e))
+
+
 class ImageService(QObject):
     loaded = pyqtSignal(str, QImage, bool, str)  # path, img, success, error
 
@@ -35,11 +118,17 @@ class ImageService(QObject):
         self._worker: _ImageWorker | None = None
         # 간단한 LRU QImage 캐시 (용량 제한: 바이트 단위)
         self._img_cache = _QImageCache(max_bytes=256 * 1024 * 1024)  # 기본 256MB
+        # 스케일별 다운샘플 QImage 캐시 (원본과 분리, 약간 더 여유)
+        self._scaled_cache = _QImageCache(max_bytes=384 * 1024 * 1024)
         # 프리로드용 스레드풀 및 세대 토큰
         self._pool = QThreadPool.globalInstance()
         self._preload_generation = 0
         # 애니메이션 정보 캐시: path -> frame_count(>1이면 애니메이션), -1 미상/계산 실패
         self._anim_frame_count: dict[str, int] = {}
+        # 저장 비동기 상태
+        self._save_thread: QThread | None = None
+        self._save_worker: _SaveWorker | None = None
+        self._save_token: _CancellationToken | None = None
 
     def scan_directory(self, dir_path: str, current_image_path: str | None):
         return scan_directory_util(dir_path, current_image_path)
@@ -54,6 +143,66 @@ class ImageService(QObject):
             return path, None, False, err
         self._img_cache.put(path, img)
         return path, img, True, ""
+
+    # --- 스케일 캐시 API -------------------------------------------------
+    def _quantize_scale(self, s: float) -> float:
+        try:
+            sf = float(s)
+        except Exception:
+            return 1.0
+        if sf >= 1.0:
+            return 1.0
+        # 대표 스냅 단계(줌 UX와 유사한 단계)
+        steps = [
+            0.0625, 0.0833, 0.1, 0.125, 0.167, 0.2,
+            0.25, 0.333, 0.4, 0.5, 0.667, 0.8, 1.0,
+        ]
+        # 가장 가까운 단계 선택
+        nearest = min(steps, key=lambda v: abs(v - sf))
+        return nearest
+
+    def get_scaled_image(self, path: str, scale: float, dpr: float = 1.0) -> Optional[QImage]:
+        """원본 QImage를 기준으로 주어진 스케일(<=1.0)과 DPR로 다운샘플된 QImage를 반환.
+        - 캐시 키: path|s=<qscale*1000>|dpr=<dpr*100>
+        - 업스케일은 수행하지 않음(요청 스케일이 1.0 이상이면 None 반환하여 원본 사용).
+        """
+        try:
+            if not path:
+                return None
+            try:
+                s = float(scale)
+            except Exception:
+                s = 1.0
+            if s >= 1.0:
+                return None
+            qscale = self._quantize_scale(max(0.01, s))
+            try:
+                dprf = float(dpr)
+            except Exception:
+                dprf = 1.0
+            # 키 구성
+            key = f"{path}|s={int(round(qscale * 1000))}|dpr={int(round(dprf * 100))}"
+            cached = self._scaled_cache.get(key)
+            if cached is not None and not cached.isNull():
+                return cached
+            # 원본 확보
+            base = self._img_cache.get(path)
+            if base is None or base.isNull():
+                _, base, ok, _ = self.load(path)
+                if not ok or base is None or base.isNull():
+                    return None
+            bw = int(round(base.width() * qscale * dprf))
+            bh = int(round(base.height() * qscale * dprf))
+            if bw < 1 or bh < 1:
+                return None
+            # 다운스케일 수행(가로세로 비율 유지)
+            scaled = base.scaled(bw, bh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            if scaled.isNull():
+                return None
+            self._scaled_cache.put(key, scaled)
+            return scaled
+        except Exception:
+            return None
 
     def load_async(self, path: str) -> None:
         # 이전 작업 취소/정리
@@ -119,6 +268,11 @@ class ImageService(QObject):
                 except Exception:
                     pass
                 self._cleanup_thread()
+        # 저장 스레드 종료
+        try:
+            self.cancel_save()
+        except Exception:
+            pass
 
     # --- 애니메이션/프레임 관련 유틸 ---
     def probe_animation(self, path: str) -> tuple[bool, int]:
@@ -225,6 +379,11 @@ class ImageService(QObject):
 
     def invalidate_path(self, path: str) -> None:
         self._img_cache.delete(path)
+        # 스케일 캐시도 같은 경로 접두사로 모두 무효화
+        try:
+            self._scaled_cache.delete_prefix(f"{path}|")
+        except Exception:
+            pass
 
     def preload(self, paths: List[str], priority: int = 0) -> None:
         """경로 목록을 백그라운드에서 디코드하여 이미지 캐시에 저장.
@@ -260,6 +419,66 @@ class ImageService(QObject):
         if success and not img.isNull():
             self._img_cache.put(path, img)
         # 실패는 무시 (로그 없음)
+
+    # --- 저장 비동기/취소 지원 ---
+    def save_async(self,
+                   img: QImage,
+                   src_path: str,
+                   dest_path: str,
+                   rotation_degrees: int,
+                   flip_horizontal: bool,
+                   flip_vertical: bool,
+                   quality: int,
+                   on_progress: Callable[[int], None] | None,
+                   on_done: Callable[[bool, str], None] | None) -> None:
+        """이미지 저장을 백그라운드에서 수행. 진행률 콜백(0-100), 완료 콜백 제공."""
+        try:
+            # 기존 저장 작업 취소 및 정리
+            self.cancel_save()
+        except Exception:
+            pass
+        token = _CancellationToken()
+        worker = _SaveWorker(img, src_path, dest_path, rotation_degrees, flip_horizontal, flip_vertical, quality, token)
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        def _cleanup():
+            try:
+                thread.quit()
+                thread.wait(2000)
+            except Exception:
+                pass
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+            try:
+                thread.deleteLater()
+            except Exception:
+                pass
+            self._save_worker = None
+            self._save_thread = None
+            self._save_token = None
+        worker.progress.connect(lambda p: on_progress(p) if callable(on_progress) else None)
+        worker.done.connect(lambda ok, err: (on_done(ok, err) if callable(on_done) else None))
+        worker.done.connect(_cleanup)
+        thread.start()
+        self._save_worker = worker
+        self._save_thread = thread
+        self._save_token = token
+
+    def cancel_save(self) -> None:
+        try:
+            if self._save_token:
+                self._save_token.cancel()
+        except Exception:
+            pass
+        try:
+            if self._save_thread and self._save_thread.isRunning():
+                # 스레드에 종료 신호
+                self._save_thread.requestInterruption()
+        except Exception:
+            pass
 
     def save_with_transform(self,
                             img: QImage,
@@ -453,6 +672,23 @@ class _QImageCache:
     def clear(self) -> None:
         self._store.clear()
         self._bytes_used = 0
+
+    def delete_prefix(self, prefix: str) -> None:
+        """주어진 접두사로 시작하는 모든 키를 제거한다."""
+        try:
+            keys = list(self._store.keys())
+        except Exception:
+            keys = []
+        for k in keys:
+            try:
+                if k.startswith(prefix):
+                    img = self._store.pop(k)
+                    try:
+                        self._bytes_used -= self._estimate_bytes(img)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def _evict_if_needed(self) -> None:
         while self._bytes_used > self._max_bytes and self._store:

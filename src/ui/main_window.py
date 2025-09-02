@@ -1,7 +1,7 @@
 import os
 import sys
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu  # type: ignore[import]
-from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF  # type: ignore[import]
+from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent  # type: ignore[import]
 from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap, QMovie, QColorSpace  # type: ignore[import]
 
 from .image_view import ImageView
@@ -23,8 +23,10 @@ from .settings_dialog import SettingsDialog
 from .shortcuts_help_dialog import ShortcutsHelpDialog
 
 class JusawiViewer(QMainWindow):
-    def __init__(self):
+    def __init__(self, skip_session_restore: bool = False):
         super().__init__()
+        # 세션 복원 스킵 여부(명령줄로 파일/폴더가 지정된 경우 사용)
+        self._skip_session_restore = bool(skip_session_restore)
         self.setWindowTitle("Jusawi")
 
         self.current_image_path = None
@@ -57,6 +59,9 @@ class JusawiViewer(QMainWindow):
         self._is_dirty = False
         self._save_policy = 'discard'  # 'discard' | 'ask' | 'overwrite' | 'save_as'
         self._jpeg_quality = 95
+        # 편집 히스토리(Undo/Redo)
+        self._history_undo = []  # list[tuple[int,bool,bool]]
+        self._history_redo = []  # list[tuple[int,bool,bool]]
         # 애니메이션 재생 상태
         self._anim_is_playing = False
         self._anim_timer = QTimer(self)
@@ -105,6 +110,39 @@ class JusawiViewer(QMainWindow):
         # 이미지 서비스
         self.image_service = ImageService(self)
         self.image_service.loaded.connect(self._on_image_loaded)
+        # 마지막 DPR 기억(배율 일관성 유지용)
+        try:
+            self._last_dpr = float(self.image_display_area.viewport().devicePixelRatioF())
+        except Exception:
+            self._last_dpr = 1.0
+        # 자유 줌 상태에서 DPR 변경 시 배율(%)을 그대로 유지: True면 시각 크기 보존(배율 변함), False면 배율 고정
+        # 사진 뷰어 UX 기준: 배율 표시는 불변이 더 직관적 -> 기본 False
+        self._preserve_visual_size_on_dpr_change = False
+        # DPR 전환 가드 및 해제 타이머(중복 재적용/재디바운스 방지)
+        self._in_dpr_transition = False
+        self._dpr_guard_timer = QTimer(self)
+        self._dpr_guard_timer.setSingleShot(True)
+        self._dpr_guard_timer.timeout.connect(lambda: setattr(self, "_in_dpr_transition", False))
+        # 썸네일(다운샘플) 표시 후 원본으로 1회 업그레이드 타이머
+        self._fullres_upgrade_timer = QTimer(self)
+        self._fullres_upgrade_timer.setSingleShot(True)
+        self._fullres_upgrade_timer.timeout.connect(self._upgrade_to_fullres_if_needed)
+        # 사용자 요청: 100% 이하 배율에서 썸네일 캐싱/표시를 비활성화하고 항상 원본을 사용
+        self._disable_scaled_cache_below_100 = True
+        # DPR/모니터 변경 시 재적용 트리거 설정 (표시 후에도 보장되도록 별도 보조 메서드 사용)
+        self._screen_signal_connected = False
+        try:
+            self._ensure_screen_signal_connected()
+        except Exception:
+            pass
+        # 뷰포트 스케일 적용 디바운스 타이머
+        self._scale_apply_timer = QTimer(self)
+        self._scale_apply_timer.setSingleShot(True)
+        self._scale_apply_timer.setInterval(30)
+        self._scale_apply_timer.timeout.connect(self._apply_scaled_pixmap_now)
+        self._scale_apply_delay_ms = 30
+        # 원본 풀해상도 이미지 보관(저장/고배율 표시용)
+        self._fullres_image = None
         # 프리로드 설정(다음/이전 1장씩)
         self._preload_radius = 1
 
@@ -199,6 +237,21 @@ class JusawiViewer(QMainWindow):
             "QStatusBar QLabel { color: #EAEAEA; } "
             "QStatusBar::item { border: 0px; }"
         )
+        # 진행 표시 위젯(라이트): 상태바 우측에 임시 배치
+        try:
+            from PyQt6.QtWidgets import QProgressBar
+            self._progress = QProgressBar(self)
+            self._progress.setFixedWidth(160)
+            self._progress.setRange(0, 100)
+            self._progress.setVisible(False)
+            self._cancel_btn = QPushButton("취소", self)
+            self._cancel_btn.setVisible(False)
+            self._cancel_btn.clicked.connect(lambda: getattr(self.image_service, "cancel_save", lambda: None)())
+            self.statusBar().addPermanentWidget(self._progress)
+            self.statusBar().addPermanentWidget(self._cancel_btn)
+        except Exception:
+            self._progress = None
+            self._cancel_btn = None
         # 상태바도 DnD 허용 및 필터 설치
         try:
             self.statusBar().setAcceptDrops(True)
@@ -233,10 +286,14 @@ class JusawiViewer(QMainWindow):
         # 전체화면 진입 전 스타일 복원용 변수
         self._stylesheet_before_fullscreen = None
 
+        # 토스트 비활성화: 상태바/다이얼로그만 사용
+        self.toast = None
+
         # 설정 로드 및 최근/세션 복원
         self.load_settings()
         self.rebuild_recent_menu()
-        self.restore_last_session()
+        if not getattr(self, "_skip_session_restore", False):
+            self.restore_last_session()
         # 남은 임시/백업 파일 정리 (최근 폴더 기준, 실패 무시)
         try:
             if self.last_open_dir and os.path.isdir(self.last_open_dir):
@@ -249,6 +306,8 @@ class JusawiViewer(QMainWindow):
             self._preferred_view_mode = getattr(self, "_default_view_mode", 'fit')
         except Exception:
             self._preferred_view_mode = 'fit'
+        # 배타 포커스를 위한 전역 단축키 관리
+        self._global_shortcuts_enabled = True
 
     def clamp(self, value, min_v, max_v):
         return max(min_v, min(value, max_v))
@@ -258,6 +317,73 @@ class JusawiViewer(QMainWindow):
 
     def _setup_global_dnd(self):
         setup_global_dnd_ext(self)
+
+    def _set_global_shortcuts_enabled(self, enabled: bool) -> None:
+        self._global_shortcuts_enabled = bool(enabled)
+        # ImageView 내부 QShortcut + shortcuts_manager에서 등록된 단축키 모두 대상
+        try:
+            for sc in getattr(self, "_shortcuts", []) or []:
+                try:
+                    sc.setEnabled(self._global_shortcuts_enabled)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "anim_space_shortcut") and self.anim_space_shortcut:
+                self.anim_space_shortcut.setEnabled(self._global_shortcuts_enabled)
+        except Exception:
+            pass
+
+    # ----- Undo/Redo 히스토리 -----
+    def _capture_state(self):
+        return (int(self._tf_rotation) % 360, bool(self._tf_flip_h), bool(self._tf_flip_v))
+
+    def _restore_state(self, state) -> None:
+        try:
+            rot, fh, fv = state
+            self._tf_rotation = int(rot) % 360
+            self._tf_flip_h = bool(fh)
+            self._tf_flip_v = bool(fv)
+            self._apply_transform_to_view()
+            self._mark_dirty(True)
+            if getattr(self.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+                self.image_display_area.apply_current_view_mode()
+        except Exception:
+            pass
+
+    def _history_push(self) -> None:
+        try:
+            self._history_undo.append(self._capture_state())
+            self._history_redo.clear()
+        except Exception:
+            pass
+
+    def undo_action(self) -> None:
+        if not self.load_successful:
+            return
+        if not self._history_undo:
+            return
+        try:
+            cur = self._capture_state()
+            prev = self._history_undo.pop()
+            self._history_redo.append(cur)
+            self._restore_state(prev)
+        except Exception:
+            pass
+
+    def redo_action(self) -> None:
+        if not self.load_successful:
+            return
+        if not self._history_redo:
+            return
+        try:
+            cur = self._capture_state()
+            nxt = self._history_redo.pop()
+            self._history_undo.append(cur)
+            self._restore_state(nxt)
+        except Exception:
+            pass
 
     # Settings: 저장/로드
     def load_settings(self):
@@ -349,6 +475,13 @@ class JusawiViewer(QMainWindow):
     def on_scale_changed(self, scale: float):
         self._last_scale = scale
         self.update_status_right()
+        # 디바운스 후 스케일별 다운샘플 적용
+        try:
+            if getattr(self, "_in_dpr_transition", False):
+                return
+            self._scale_apply_timer.start(getattr(self, "_scale_apply_delay_ms", 30))
+        except Exception:
+            pass
 
     def on_cursor_pos_changed(self, x: int, y: int):
         self._last_cursor_x = x
@@ -551,6 +684,7 @@ class JusawiViewer(QMainWindow):
     def rotate_cw_90(self):
         if not self.load_successful:
             return
+        self._history_push()
         self._tf_rotation = (self._tf_rotation + 90) % 360
         self._apply_transform_to_view()
         self._mark_dirty(True)
@@ -561,6 +695,7 @@ class JusawiViewer(QMainWindow):
     def rotate_ccw_90(self):
         if not self.load_successful:
             return
+        self._history_push()
         self._tf_rotation = (self._tf_rotation - 90) % 360
         self._apply_transform_to_view()
         self._mark_dirty(True)
@@ -570,6 +705,7 @@ class JusawiViewer(QMainWindow):
     def rotate_180(self):
         if not self.load_successful:
             return
+        self._history_push()
         self._tf_rotation = (self._tf_rotation + 180) % 360
         self._apply_transform_to_view()
         self._mark_dirty(True)
@@ -579,6 +715,7 @@ class JusawiViewer(QMainWindow):
     def flip_horizontal(self):
         if not self.load_successful:
             return
+        self._history_push()
         self._tf_flip_h = not self._tf_flip_h
         self._apply_transform_to_view()
         self._mark_dirty(True)
@@ -588,6 +725,7 @@ class JusawiViewer(QMainWindow):
     def flip_vertical(self):
         if not self.load_successful:
             return
+        self._history_push()
         self._tf_flip_v = not self._tf_flip_v
         self._apply_transform_to_view()
         self._mark_dirty(True)
@@ -608,6 +746,17 @@ class JusawiViewer(QMainWindow):
     def _apply_loaded_image(self, path: str, img: QImage, source: str):
         pixmap = QPixmap.fromImage(img)
         self.image_display_area.setPixmap(pixmap)
+        # 풀해상도 보관
+        try:
+            self._fullres_image = img
+            # 원본 자연 크기를 뷰에 전달(썸네일 표시 중에도 좌표계 일관)
+            try:
+                self.image_display_area._natural_width = int(img.width())
+                self.image_display_area._natural_height = int(img.height())
+            except Exception:
+                pass
+        except Exception:
+            self._fullres_image = None
         # 기존 QMovie 정리
         try:
             if getattr(self, "_movie", None):
@@ -668,9 +817,20 @@ class JusawiViewer(QMainWindow):
         self._tf_flip_v = False
         self._apply_transform_to_view()
         self._mark_dirty(False)
+        # 새 이미지에서는 히스토리 초기화
+        try:
+            self._history_undo.clear()
+            self._history_redo.clear()
+        except Exception:
+            pass
         # 탐색 성능 향상: 이웃 이미지 프리로드
         try:
             self._preload_neighbors()
+        except Exception:
+            pass
+        # 초기 뷰 배율에 맞춰 다운샘플 적용 시도(디바운스)
+        try:
+            self._scale_apply_timer.start(getattr(self, "_scale_apply_delay_ms", 30))
         except Exception:
             pass
         if source in ('open', 'drop'):
@@ -683,6 +843,86 @@ class JusawiViewer(QMainWindow):
                 self.rebuild_recent_menu()
             except Exception:
                 pass
+
+        # 현재 화면 DPR에 맞춰 다운샘플 재적용 시도
+        try:
+            self._scale_apply_timer.start(0)
+        except Exception:
+            pass
+
+    def _on_screen_changed(self, screen):
+        # 새 스크린의 배율 변화도 추적하여 스케일 재적용
+        try:
+            if screen:
+                try:
+                    screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # 즉시 재적용(모니터 이동 직후) — DPR 전환 가드 활성화
+        self._begin_dpr_transition()
+        try:
+            self._apply_scaled_pixmap_now()
+        except Exception:
+            pass
+
+    def _on_dpi_changed(self, *args):
+        # DPI 변경 디바운스: 짧은 기간 동안 중복 재적용 억제
+        self._begin_dpr_transition()
+        try:
+            self._apply_scaled_pixmap_now()
+        except Exception:
+            pass
+
+    def _begin_dpr_transition(self, guard_ms: int = 160):
+        try:
+            self._in_dpr_transition = True
+            if self._dpr_guard_timer.isActive():
+                self._dpr_guard_timer.stop()
+            self._dpr_guard_timer.start(int(max(60, guard_ms)))
+        except Exception:
+            self._in_dpr_transition = True
+
+    def _ensure_screen_signal_connected(self):
+        if getattr(self, "_screen_signal_connected", False):
+            return
+        win = None
+        try:
+            win = self.windowHandle() if hasattr(self, 'windowHandle') else None
+        except Exception:
+            win = None
+        if win:
+            try:
+                win.screenChanged.connect(self._on_screen_changed)
+                self._screen_signal_connected = True
+            except Exception:
+                self._screen_signal_connected = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            self._ensure_screen_signal_connected()
+        except Exception:
+            pass
+
+    def event(self, e):
+        # 위젯/윈도우 레벨의 DPR 변경 이벤트를 캐치하여 일관 동작 보장
+        t = e.type()
+        if t == QEvent.Type.DevicePixelRatioChange:
+            self._begin_dpr_transition()
+            try:
+                self._apply_scaled_pixmap_now()
+            except Exception:
+                pass
+            vm = str(getattr(self.image_display_area, "_view_mode", "free") or "free")
+            if vm in ("fit", "fit_width", "fit_height"):
+                try:
+                    self.image_display_area.apply_current_view_mode()
+                except Exception:
+                    pass
+            return super().event(e)
+        return super().event(e)
 
     def _preload_neighbors(self):
         """현재 인덱스를 기준으로 다음/이전 이미지를 비동기로 미리 디코드.
@@ -756,6 +996,10 @@ class JusawiViewer(QMainWindow):
                         resolved = 'dark'
             except Exception:
                 resolved = 'dark'
+        try:
+            self._resolved_theme = resolved
+        except Exception:
+            pass
         if resolved == 'light':
             bg = "#F0F0F0"
             fg = "#222222"
@@ -859,39 +1103,114 @@ class JusawiViewer(QMainWindow):
 
         if reply == QMessageBox.StandardButton.Yes:
             try:
+                # 1) 파일 잠금 방지: 애니메이션/뷰 리소스 해제
+                try:
+                    # QMovie 정지 및 연결 해제
+                    if getattr(self, "_movie", None):
+                        try:
+                            try:
+                                self._movie.frameChanged.disconnect(self._on_movie_frame)
+                            except Exception:
+                                pass
+                            self._movie.stop()
+                        except Exception:
+                            pass
+                        try:
+                            self._movie.deleteLater()
+                        except Exception:
+                            pass
+                        self._movie = None
+                    # 수동 타이머 정지
+                    try:
+                        if getattr(self, "_anim_timer", None):
+                            self._anim_timer.stop()
+                    except Exception:
+                        pass
+                    self._anim_is_playing = False
+                    try:
+                        # 뷰로부터 현재 픽스맵 참조 해제 (파일 핸들은 없지만 메모리 해제 가속)
+                        self.image_display_area.updatePixmapFrame(None)
+                    except Exception:
+                        pass
+                    try:
+                        # 완전 해제(장면 초기화)
+                        self.image_display_area.setPixmap(None)
+                    except Exception:
+                        pass
+                    try:
+                        # 이미지 캐시 무효화
+                        self.image_service.invalidate_path(self.current_image_path)
+                    except Exception:
+                        pass
+                    try:
+                        import gc
+                        gc.collect()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
                 # Windows 10+ 환경에 최적화된 휴지통 삭제
                 move_to_trash_windows(self.current_image_path)
                 
-                # 현재 이미지를 목록에서 제거
-                if self.current_image_path in self.image_files_in_dir:
-                    self.image_files_in_dir.remove(self.current_image_path)
-                
-                # 다음 이미지로 이동하거나 이전 이미지로 이동
+                # 현재 이미지를 목록에서 제거하고, 바로 이전 이미지로 이동
+                original_index = self.current_image_index
+                try:
+                    if self.current_image_path in self.image_files_in_dir:
+                        self.image_files_in_dir.remove(self.current_image_path)
+                except Exception:
+                    pass
+
                 if self.image_files_in_dir:
-                    # 인덱스 조정
-                    if self.current_image_index >= len(self.image_files_in_dir):
-                        self.current_image_index = len(self.image_files_in_dir) - 1
-                    
-                    # 새로운 이미지 로드
-                    if self.current_image_index >= 0:
-                        self.load_image(self.image_files_in_dir[self.current_image_index], source='nav')
-                    else:
-                        # 이미지가 없으면 화면 클리어
-                        self.clear_display()
+                    # 이전 이미지 우선 로드
+                    target_index = original_index - 1 if (isinstance(original_index, int) and original_index > 0) else 0
+                    target_index = max(0, min(target_index, len(self.image_files_in_dir) - 1))
+                    self.current_image_index = target_index
+                    self.load_image(self.image_files_in_dir[self.current_image_index], source='nav')
                 else:
                     # 모든 이미지가 삭제되면 화면 클리어
                     self.clear_display()
                 
                 self.update_button_states()
+                # 파일 시스템 변경사항 반영을 위해 폴더 재스캔
+                try:
+                    self._rescan_current_dir()
+                except Exception:
+                    pass
+                # 삭제 성공: 상태바 메시지로 안내
+                try:
+                    self.statusBar().showMessage("삭제됨 — 실행 취소는 휴지통에서 가능", 3000)
+                except Exception:
+                    pass
                 
             except Exception as e:
-                QMessageBox.critical(
-                    self,
-                    "삭제 오류",
-                    f"파일을 삭제할 수 없습니다:\n{str(e)}"
-                )
+                try:
+                    QMessageBox.critical(
+                        self,
+                        "삭제 오류",
+                        f"파일을 삭제할 수 없습니다:\n{str(e)}"
+                    )
+                except Exception:
+                    pass
 
     # 삭제 기능은 delete_utils로 분리됨
+    def _undo_last_delete(self):
+        # 휴지통 복원은 OS/라이브러리 의존성이 높아 표준화가 어려움.
+        # 우선 휴지통을 열어 사용자가 즉시 복원할 수 있게 안내.
+        try:
+            import subprocess, sys
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer.exe", "shell:RecycleBinFolder"])  # 휴지통 열기
+        except Exception:
+            pass
+        # 잠시 후 디렉터리 재스캔 시도(복원 반영)
+        try:
+            QTimer.singleShot(1200, getattr(self, "_rescan_current_dir", lambda: None))
+        except Exception:
+            try:
+                self._rescan_current_dir()
+            except Exception:
+                pass
 
     def clear_display(self):
         """이미지 표시 영역 클리어"""
@@ -944,11 +1263,55 @@ class JusawiViewer(QMainWindow):
         if self._tf_rotation == 0 and not self._tf_flip_h and not self._tf_flip_v:
             return True
         try:
-            pix = self.image_display_area.originalPixmap()
-            if not pix or pix.isNull():
-                return False
-            img = pix.toImage()
-            ok, err = self.image_service.save_with_transform(
+            # 항상 풀해상도 QImage를 사용하여 품질 보존
+            img = getattr(self, "_fullres_image", None)
+            if img is None or img.isNull():
+                # 폴백: 뷰의 현재 픽스맵(가능하면 회피)
+                pix = self.image_display_area.originalPixmap()
+                if not pix or pix.isNull():
+                    return False
+                img = pix.toImage()
+            # 진행 UI 표시
+            try:
+                if self._progress:
+                    self._progress.setVisible(True)
+                    self._progress.setValue(0)
+                if self._cancel_btn:
+                    self._cancel_btn.setVisible(True)
+            except Exception:
+                pass
+
+            def on_progress(p: int):
+                try:
+                    if self._progress:
+                        self._progress.setValue(max(0, min(100, int(p))))
+                except Exception:
+                    pass
+
+            def on_done(ok: bool, err: str):
+                try:
+                    if self._progress:
+                        self._progress.setVisible(False)
+                    if self._cancel_btn:
+                        self._cancel_btn.setVisible(False)
+                except Exception:
+                    pass
+                if ok:
+                    # 저장 후 재로드 및 상태 리셋
+                    self.load_image(self.current_image_path, source='save')
+                    self._mark_dirty(False)
+                    try:
+                        self.statusBar().showMessage("저장됨", 1800)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        QMessageBox.critical(self, "저장 오류", err or "파일 저장에 실패했습니다.")
+                    except Exception:
+                        pass
+
+            # 비동기 저장 실행
+            self.image_service.save_async(
                 img,
                 self.current_image_path,
                 self.current_image_path,
@@ -956,16 +1319,15 @@ class JusawiViewer(QMainWindow):
                 self._tf_flip_h,
                 self._tf_flip_v,
                 quality=self._jpeg_quality,
+                on_progress=on_progress,
+                on_done=on_done,
             )
-            if not ok:
-                QMessageBox.critical(self, "저장 오류", err or "파일 저장에 실패했습니다.")
-                return False
-            # 저장 후 재로드 및 상태 리셋
-            self.load_image(self.current_image_path, source='save')
-            self._mark_dirty(False)
             return True
         except Exception as e:
-            QMessageBox.critical(self, "저장 오류", str(e))
+            try:
+                QMessageBox.critical(self, "저장 오류", str(e))
+            except Exception:
+                pass
             return False
 
     def save_current_image_as(self) -> bool:
@@ -977,10 +1339,12 @@ class JusawiViewer(QMainWindow):
             dest_path, _ = QFileDialog.getSaveFileName(self, "다른 이름으로 저장", start_dir)
             if not dest_path:
                 return False
-            pix = self.image_display_area.originalPixmap()
-            if not pix or pix.isNull():
-                return False
-            img = pix.toImage()
+            img = getattr(self, "_fullres_image", None)
+            if img is None or img.isNull():
+                pix = self.image_display_area.originalPixmap()
+                if not pix or pix.isNull():
+                    return False
+                img = pix.toImage()
             ok, err = self.image_service.save_with_transform(
                 img,
                 self.current_image_path,
@@ -1000,6 +1364,262 @@ class JusawiViewer(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "저장 오류", str(e))
             return False
+
+    # ----- 스케일별 다운샘플 적용 -----
+    def _apply_scaled_pixmap_now(self):
+        if not self.load_successful or not self.current_image_path:
+            return
+        # 앵커 보존: DPR 변경/재적용 중에도 현재 보던 지점을 유지
+        item_anchor_point = None
+        try:
+            view = self.image_display_area
+            pix_item = getattr(view, "_pix_item", None)
+            if pix_item:
+                vp_center = view.viewport().rect().center()
+                scene_center = view.mapToScene(vp_center)
+                item_anchor_point = pix_item.mapFromScene(scene_center)
+        except Exception:
+            item_anchor_point = None
+        # 애니메이션 파일은 프레임 교체 성능/동기화 문제를 피하기 위해 제외
+        try:
+            if self._is_current_file_animation():
+                return
+            if getattr(self, "_movie", None):
+                return
+        except Exception:
+            pass
+        try:
+            cur_scale = float(getattr(self, "_last_scale", 1.0) or 1.0)
+        except Exception:
+            cur_scale = 1.0
+        # DPR 추정
+        try:
+            dpr = float(self.image_display_area.viewport().devicePixelRatioF())
+        except Exception:
+            try:
+                dpr = float(self.devicePixelRatioF())
+            except Exception:
+                dpr = 1.0
+        prev_dpr = float(getattr(self, "_last_dpr", dpr) or dpr)
+        dpr_changed = bool(abs(dpr - prev_dpr) > 1e-3)
+        view_mode = str(getattr(self.image_display_area, "_view_mode", "free") or "free")
+
+        # DPR 변경 + 화면 맞춤 계열: 즉시 풀해상도로 재맞춤(가장 예측 가능한 UX)
+        if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):
+            try:
+                if getattr(self, "_fullres_image", None) is not None and not self._fullres_image.isNull():
+                    pm = QPixmap.fromImage(self._fullres_image)
+                    self.image_display_area.updatePixmapFrame(pm)
+                    self.image_display_area.set_source_scale(1.0)
+                    # 다시 맞춤 수행
+                    self.image_display_area.apply_current_view_mode()
+                    # 앵커 복원(가능하면)
+                    try:
+                        if item_anchor_point is not None and getattr(self.image_display_area, "_pix_item", None):
+                            new_scene_point = self.image_display_area._pix_item.mapToScene(item_anchor_point)
+                            self.image_display_area.centerOn(new_scene_point)
+                    except Exception:
+                        pass
+                    self._last_dpr = dpr
+                    return
+            except Exception:
+                pass
+        # 스케일 >= 1: 풀해상도로 복귀
+        if cur_scale >= 1.0:
+            try:
+                if getattr(self, "_fullres_image", None) is not None and not self._fullres_image.isNull():
+                    pm = QPixmap.fromImage(self._fullres_image)
+                    self.image_display_area.updatePixmapFrame(pm)
+                    self.image_display_area.set_source_scale(1.0)
+            except Exception:
+                pass
+            # DPR 변경 시, 화면 맞춤 계열이면 다시 맞춤 수행
+            if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):
+                try:
+                    self.image_display_area.apply_current_view_mode()
+                except Exception:
+                    pass
+            # 화면 맞춤 재수행(필요 시)
+            if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):
+                try:
+                    self.image_display_area.apply_current_view_mode()
+                except Exception:
+                    pass
+            # 앵커 복원(가능한 경우)
+            try:
+                if item_anchor_point is not None and getattr(self.image_display_area, "_pix_item", None):
+                    new_scene_point = self.image_display_area._pix_item.mapToScene(item_anchor_point)
+                    self.image_display_area.centerOn(new_scene_point)
+            except Exception:
+                pass
+            self._last_dpr = dpr
+            # DPR 전환 중에는 추가 스케일 디바운스 억제
+            if getattr(self, "_in_dpr_transition", False):
+                return
+            return
+        # 사용자 정책: 100% 미만에서도 썸네일 대신 항상 원본 사용
+        if getattr(self, "_disable_scaled_cache_below_100", False) and cur_scale < 1.0:
+            try:
+                if getattr(self, "_fullres_image", None) is not None and not self._fullres_image.isNull():
+                    pm = QPixmap.fromImage(self._fullres_image)
+                    self.image_display_area.updatePixmapFrame(pm)
+                    self.image_display_area.set_source_scale(1.0)
+            except Exception:
+                pass
+            # DPR 변경 시 화면 맞춤 계열이면 재맞춤
+            if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):
+                try:
+                    self.image_display_area.apply_current_view_mode()
+                except Exception:
+                    pass
+            # 앵커 복원
+            try:
+                if item_anchor_point is not None and getattr(self.image_display_area, "_pix_item", None):
+                    new_scene_point = self.image_display_area._pix_item.mapToScene(item_anchor_point)
+                    self.image_display_area.centerOn(new_scene_point)
+            except Exception:
+                pass
+            self._last_dpr = dpr
+            return
+        # 다운샘플 요청
+        try:
+            scaled = self.image_service.get_scaled_image(self.current_image_path, cur_scale, dpr)
+        except Exception:
+            scaled = None
+        if scaled is None or scaled.isNull():
+            # 폴백: 풀해상도 유지
+            try:
+                if getattr(self, "_fullres_image", None) is not None and not self._fullres_image.isNull():
+                    pm_fb = QPixmap.fromImage(self._fullres_image)
+                    self.image_display_area.updatePixmapFrame(pm_fb)
+                    self.image_display_area.set_source_scale(1.0)
+            except Exception:
+                pass
+            # DPR 변경 시 화면 맞춤 계열이면 재맞춤
+            if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):
+                try:
+                    self.image_display_area.apply_current_view_mode()
+                except Exception:
+                    pass
+            # 앵커 복원
+            try:
+                if item_anchor_point is not None and getattr(self.image_display_area, "_pix_item", None):
+                    new_scene_point = self.image_display_area._pix_item.mapToScene(item_anchor_point)
+                    self.image_display_area.centerOn(new_scene_point)
+            except Exception:
+                pass
+            self._last_dpr = dpr
+            if getattr(self, "_in_dpr_transition", False):
+                return
+            return
+        # 소스 스케일 추정: scaled는 base*(qscale*dpr)로 생성됨. 비율을 역으로 환산
+        try:
+            base_w = int(self._fullres_image.width()) if getattr(self, "_fullres_image", None) else 0
+            base_h = int(self._fullres_image.height()) if getattr(self, "_fullres_image", None) else 0
+            sw = int(scaled.width())
+            sh = int(scaled.height())
+            s_w = (sw / float(base_w)) / float(dpr) if base_w > 0 else cur_scale
+            s_h = (sh / float(base_h)) / float(dpr) if base_h > 0 else cur_scale
+            src_scale = max(0.01, min(1.0, min(s_w, s_h)))
+        except Exception:
+            src_scale = max(0.01, min(1.0, cur_scale))
+        # 픽스맵 교체 및 소스 스케일 보정
+        try:
+            pm_scaled = QPixmap.fromImage(scaled)
+            self.image_display_area.updatePixmapFrame(pm_scaled)
+            self.image_display_area.set_source_scale(src_scale)
+            # 자연 크기는 이미 _apply_loaded_image에서 설정됨. 없을 경우 보완
+            if not getattr(self.image_display_area, "_natural_width", 0):
+                try:
+                    if getattr(self, "_fullres_image", None):
+                        self.image_display_area._natural_width = int(self._fullres_image.width())
+                        self.image_display_area._natural_height = int(self._fullres_image.height())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # DPR 변경 시 화면 맞춤 계열이면 재맞춤
+        if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):
+            try:
+                self.image_display_area.apply_current_view_mode()
+            except Exception:
+                pass
+        # 자유 줌이며 시각적 크기 보존 옵션이 켜져 있으면 배율 보정(prev_dpr/dpr)
+        elif dpr_changed and getattr(self, "_preserve_visual_size_on_dpr_change", False):
+            try:
+                last_scale = float(getattr(self, "_last_scale", 1.0) or 1.0)
+                desired_scale = last_scale * (prev_dpr / dpr)
+                self.image_display_area.set_absolute_scale(desired_scale)
+            except Exception:
+                pass
+        # 앵커 복원
+        try:
+            if item_anchor_point is not None and getattr(self.image_display_area, "_pix_item", None):
+                new_scene_point = self.image_display_area._pix_item.mapToScene(item_anchor_point)
+                self.image_display_area.centerOn(new_scene_point)
+        except Exception:
+            pass
+        self._last_dpr = dpr
+        if getattr(self, "_in_dpr_transition", False):
+            return
+        # 다운샘플 표시 직후, 1회성 원본 업그레이드를 예약(줌 크기와 무관)
+        try:
+            if getattr(self, "_fullres_image", None) is not None and not self._fullres_image.isNull():
+                # 애니메이션이 아니고 현재 소스 스케일이 1.0 미만일 때만 의미 있음
+                ss = float(getattr(self.image_display_area, "_source_scale", 1.0) or 1.0)
+                if ss < 1.0:
+                    if self._fullres_upgrade_timer.isActive():
+                        self._fullres_upgrade_timer.stop()
+                    # 짧은 지연 후 업그레이드(연속 줌 중에는 마지막 상태에 수렴)
+                    self._fullres_upgrade_timer.start(120)
+        except Exception:
+            pass
+
+    def _upgrade_to_fullres_if_needed(self):
+        # 현재 표시를 원본 QImage로 한번만 업그레이드(시각 배율 불변)
+        try:
+            if not self.load_successful or not self.current_image_path:
+                return
+            # 애니메이션 파일은 제외
+            if self._is_current_file_animation() or getattr(self, "_movie", None):
+                return
+            if getattr(self, "_fullres_image", None) is None or self._fullres_image.isNull():
+                return
+            # 이미 원본이면 불필요
+            ss = float(getattr(self.image_display_area, "_source_scale", 1.0) or 1.0)
+            if ss >= 1.0:
+                return
+            # 앵커 보존
+            item_anchor_point = None
+            try:
+                view = self.image_display_area
+                pix_item = getattr(view, "_pix_item", None)
+                if pix_item:
+                    vp_center = view.viewport().rect().center()
+                    scene_center = view.mapToScene(vp_center)
+                    item_anchor_point = pix_item.mapFromScene(scene_center)
+            except Exception:
+                item_anchor_point = None
+            # DPR 추출
+            try:
+                dpr = float(self.image_display_area.viewport().devicePixelRatioF())
+            except Exception:
+                try:
+                    dpr = float(self.devicePixelRatioF())
+                except Exception:
+                    dpr = 1.0
+            pm = QPixmap.fromImage(self._fullres_image)
+            self.image_display_area.updatePixmapFrame(pm)
+            self.image_display_area.set_source_scale(1.0)
+            # 앵커 복원
+            try:
+                if item_anchor_point is not None and getattr(self.image_display_area, "_pix_item", None):
+                    new_scene_point = self.image_display_area._pix_item.mapToScene(item_anchor_point)
+                    self.image_display_area.centerOn(new_scene_point)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _handle_dirty_before_action(self) -> bool:
         # 정책 적용
@@ -1045,6 +1665,8 @@ class JusawiViewer(QMainWindow):
                 return
             except Exception:
                 pass
+        # 대화상자 열릴 때 단축키 비활성
+        self._set_global_shortcuts_enabled(False)
         dlg = SettingsDialog(self)
         self._settings_dialog = dlg
         dlg.load_from_viewer(self)
@@ -1067,15 +1689,43 @@ class JusawiViewer(QMainWindow):
             self._settings_dialog = None
         except Exception:
             pass
+        # 대화상자 닫힐 때 단축키 복원
+        self._set_global_shortcuts_enabled(True)
 
     def open_shortcuts_help(self):
+        # 대화상자 열릴 때 단축키 비활성
+        self._set_global_shortcuts_enabled(False)
         dlg = ShortcutsHelpDialog(self)
         dlg.exec()
+        # 닫힌 후 복원
+        self._set_global_shortcuts_enabled(True)
 
     def scan_directory(self, dir_path):
         self.image_files_in_dir, self.current_image_index = self.image_service.scan_directory(dir_path, self.current_image_path)
+        # 폴더만 열어 현재 선택된 파일이 없을 때 첫 이미지로 기본 설정
+        try:
+            if (self.current_image_index is None or self.current_image_index < 0) and self.image_files_in_dir:
+                self.current_image_index = 0
+        except Exception:
+            if self.image_files_in_dir:
+                self.current_image_index = 0
         self.update_button_states()
         self.update_status_left()
+
+    def _rescan_current_dir(self):
+        """현재 폴더를 재스캔하여 파일 목록을 최신화한다."""
+        try:
+            dir_path = None
+            if self.current_image_path:
+                d = os.path.dirname(self.current_image_path)
+                if d and os.path.isdir(d):
+                    dir_path = d
+            if not dir_path and getattr(self, "last_open_dir", "") and os.path.isdir(self.last_open_dir):
+                dir_path = self.last_open_dir
+            if dir_path:
+                self.scan_directory(dir_path)
+        except Exception:
+            pass
 
     def show_prev_image(self):
         nav_show_prev_image(self)
@@ -1114,4 +1764,5 @@ class JusawiViewer(QMainWindow):
             self.save_last_session()
         except Exception:
             pass
+        super().closeEvent(event)
         super().closeEvent(event)
