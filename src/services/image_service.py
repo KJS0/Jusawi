@@ -6,6 +6,9 @@ from PyQt6.QtGui import QImage, QImageReader, QTransform, QColorSpace  # type: i
 
 from ..utils.file_utils import scan_directory_util, safe_write_bytes
 from .metadata_service import extract_metadata, encode_with_metadata
+from ..utils.logging_setup import get_logger
+
+_log = get_logger("svc.ImageService")
 
 
 class _ImageWorker(QObject):
@@ -107,6 +110,12 @@ class _SaveWorker(QObject):
             self.done.emit(True, "")
         except Exception as e:
             self.done.emit(False, str(e))
+        finally:
+            try:
+                _ok = 'e' not in locals()
+                _log.info("save_worker_done | dst=%s | ok=%s", os.path.basename(self._dst), _ok)
+            except Exception:
+                pass
 
 
 class ImageService(QObject):
@@ -137,12 +146,31 @@ class ImageService(QObject):
         # 캐시 히트 시 즉시 반환
         cached = self._img_cache.get(path)
         if cached is not None and not cached.isNull():
+            try:
+                _log.info("load_cache_hit | file=%s | w=%d | h=%d", os.path.basename(path), int(cached.width()), int(cached.height()))
+            except Exception:
+                pass
             return path, cached, True, ""
-        img, ok, err = _read_qimage_with_exif_auto_transform(path)
-        if not ok:
-            return path, None, False, err
-        self._img_cache.put(path, img)
-        return path, img, True, ""
+        try:
+            img, ok, err = _read_qimage_with_exif_auto_transform(path)
+            if not ok:
+                try:
+                    _log.error("load_decode_fail | file=%s | err=%s", os.path.basename(path), err or "")
+                except Exception:
+                    pass
+                return path, None, False, err
+            self._img_cache.put(path, img)
+            try:
+                _log.info("load_decode_ok | file=%s | w=%d | h=%d", os.path.basename(path), int(img.width()), int(img.height()))
+            except Exception:
+                pass
+            return path, img, True, ""
+        except Exception as e:
+            try:
+                _log.exception("load_exception | file=%s | err=%s", os.path.basename(path), str(e))
+            except Exception:
+                pass
+            return path, None, False, str(e)
 
     # --- 스케일 캐시 API -------------------------------------------------
     def _quantize_scale(self, s: float) -> float:
@@ -539,6 +567,10 @@ def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]
     reader.setAutoTransform(True)
     img = reader.read()
     if img.isNull():
+        try:
+            _log.warning("qimage_read_null | file=%s | qerr=%s", os.path.basename(path), reader.errorString() or "")
+        except Exception:
+            pass
         return QImage(), False, reader.errorString() or "이미지를 불러올 수 없습니다."
     img = _convert_to_srgb(img)
     return img, True, ""

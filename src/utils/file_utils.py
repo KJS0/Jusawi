@@ -10,6 +10,9 @@ from typing import Optional, Tuple
 from PyQt6.QtWidgets import QFileDialog  # type: ignore[import]
 from PyQt6.QtGui import QPixmap  # type: ignore[import]
 
+from .logging_setup import get_logger
+log = get_logger("utils.file")
+
 SUPPORTED_FORMATS = [".jpeg", ".jpg", ".png", ".bmp", ".gif", ".tiff", ".webp"]
 
 if sys.platform == "win32":  # Windows
@@ -19,7 +22,10 @@ if sys.platform == "win32":  # Windows
         strcmplogicalw_func.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
         strcmplogicalw_func.restype = ctypes.c_int
     except OSError:
-        print("경고: shlwapi.dll을 로드할 수 없어 기본 정렬을 사용합니다.")
+        try:
+            log.warning("shlwapi_load_failed_fallback_sort")
+        except Exception:
+            pass
         strcmplogicalw_func = None
 else:  # Windows가 아닌 OS
     strcmplogicalw_func = None
@@ -40,16 +46,17 @@ def open_file_dialog_util(parent_widget, initial_dir=None):
 
 def load_image_util(file_path, image_display_area):
     if not file_path:
-        print("이미지를 선택하지 않았습니다.")
+        log.info("open_dialog_empty_selection")
         return None, False
 
     pixmap = QPixmap(file_path)
     if pixmap.isNull():
-        print(f"오류: 이미지를 불러올 수 없습니다. {file_path}")
+        log.error("qpixmap_load_fail | file=%s", os.path.basename(file_path))
         image_display_area.setPixmap(None)
         return None, False
     
     image_display_area.setPixmap(pixmap)
+    log.info("qpixmap_load_ok | file=%s | w=%d | h=%d", os.path.basename(file_path), int(pixmap.width()), int(pixmap.height()))
     return file_path, True
 
 def scan_directory_util(dir_path, current_image_path):
@@ -78,10 +85,10 @@ def scan_directory_util(dir_path, current_image_path):
         image_files_in_dir = temp_file_list
 
         if current_image_index == -1 and current_image_path and image_files_in_dir:
-            print(f"경고: 현재 로드된 이미지 '{current_image_path}'를 해당 디렉토리의 스캔 목록에서 정확히 찾지 못했습니다.")
+            log.warning("scan_dir_missing_current | current=%s", os.path.basename(current_image_path))
 
     except OSError as e:
-        print(f"디렉토리 스캔 중 오류 발생: {e}")
+        log.error("scan_dir_os_error | dir=%s | err=%s", os.path.basename(dir_path or ""), str(e))
         return [], -1 
     
     return image_files_in_dir, current_image_index 

@@ -1,4 +1,6 @@
 import os
+from .logging_setup import get_logger
+log = get_logger("utils.delete")
 
 
 def move_to_trash_windows(file_path):
@@ -16,6 +18,7 @@ def move_to_trash_windows(file_path):
             try:
                 import send2trash
                 send2trash.send2trash(normalized_path)
+                log.info("trash_ok_send2trash | file=%s | attempt=%d", os.path.basename(file_path), attempt + 1)
                 return
             except ImportError:
                 # 모듈 없으면 다음 단계로
@@ -64,6 +67,7 @@ def move_to_trash_windows(file_path):
 
                 result = shell32.SHFileOperationW(ctypes.byref(fileop))
                 if result == 0:
+                    log.info("trash_ok_shell | file=%s | attempt=%d", os.path.basename(file_path), attempt + 1)
                     return
                 last_error = Exception(f"SHFileOperationW 실패: 오류 코드 {result}")
             except Exception as e2:
@@ -83,6 +87,7 @@ def move_to_trash_windows(file_path):
                     ),
                 ]
                 subprocess.run(ps, check=True, capture_output=True)
+                log.info("trash_ok_powershell | file=%s | attempt=%d", os.path.basename(file_path), attempt + 1)
                 return
             except Exception as e3:
                 last_error = e3
@@ -93,6 +98,7 @@ def move_to_trash_windows(file_path):
         time.sleep(0.1 * (2 ** attempt))
 
     # 모든 방법 실패
+    log.error("trash_fail | file=%s | err=%s", os.path.basename(file_path), str(last_error))
     raise Exception(f"휴지통 이동 실패: {last_error}")
 
 

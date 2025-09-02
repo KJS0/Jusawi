@@ -11,6 +11,8 @@ except Exception:  # pragma: no cover - Pillow optional in some environments
     ImageCms = None  # type: ignore
     PngImagePlugin = None  # type: ignore
 
+from ..utils.logging_setup import get_logger
+_log = get_logger("svc.Metadata")
 
 EXIF_ORIENTATION_TAG = 274
 
@@ -46,7 +48,11 @@ def extract_metadata(image_path: str) -> ImageMetadata:
             except Exception:
                 xmp_bytes = None
             return ImageMetadata(exif_bytes=exif_bytes, icc_profile=icc_profile, xmp_bytes=xmp_bytes)
-    except Exception:
+    except Exception as e:
+        try:
+            _log.warning("extract_metadata_fail | file=%s | err=%s", os.path.basename(image_path), str(e))
+        except Exception:
+            pass
         return ImageMetadata()
 
 
@@ -113,8 +119,16 @@ def encode_with_metadata(pil_image, dest_format: str, quality: int, meta: ImageM
 
         buf = io.BytesIO()
         pil_image.save(buf, format=fmt if fmt else None, **params)
+        try:
+            _log.info("encode_ok | fmt=%s | q=%s | exif=%s | icc=%s", fmt or "AUTO", int(quality), bool(exif_bytes), bool(meta.icc_profile))
+        except Exception:
+            pass
         return True, buf.getvalue(), ""
     except Exception as e:
+        try:
+            _log.error("encode_fail | fmt=%s | err=%s", (dest_format or "").upper(), str(e))
+        except Exception:
+            pass
         return False, b"", str(e)
 
 

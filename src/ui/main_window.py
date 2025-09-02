@@ -21,6 +21,7 @@ from ..dnd.dnd_setup import setup_global_dnd as setup_global_dnd_ext, enable_dnd
 from ..services.image_service import ImageService
 from .settings_dialog import SettingsDialog
 from .shortcuts_help_dialog import ShortcutsHelpDialog
+from ..utils.logging_setup import get_logger, get_log_dir, export_logs_zip, suggest_logs_zip_name, open_logs_folder
 
 class JusawiViewer(QMainWindow):
     def __init__(self, skip_session_restore: bool = False):
@@ -28,6 +29,7 @@ class JusawiViewer(QMainWindow):
         # 세션 복원 스킵 여부(명령줄로 파일/폴더가 지정된 경우 사용)
         self._skip_session_restore = bool(skip_session_restore)
         self.setWindowTitle("Jusawi")
+        self.log = get_logger("ui.JusawiViewer")
 
         self.current_image_path = None
         self.image_files_in_dir = []
@@ -149,10 +151,13 @@ class JusawiViewer(QMainWindow):
         self.button_layout = QHBoxLayout()
         self.open_button = QPushButton("열기")
         self.open_button.clicked.connect(self.open_file)
-        # 최근 메뉴를 별도 버튼에 연결
+        # 최근 메뉴를 별도 버튼에 연결 + 로그 메뉴 추가
         self.recent_menu = QMenu(self)
         self.recent_button = QPushButton("최근 파일")
         self.recent_button.setMenu(self.recent_menu)
+        self.log_menu = QMenu(self)
+        self.log_button = QPushButton("로그")
+        self.log_button.setMenu(self.log_menu)
 
         # 설정 버튼
         self.settings_button = QPushButton("설정")
@@ -211,6 +216,7 @@ class JusawiViewer(QMainWindow):
         # 회전 버튼(확대 바로 옆)
         self.button_layout.addWidget(self.rotate_left_button)
         self.button_layout.addWidget(self.rotate_right_button)
+        self.button_layout.addWidget(self.log_button)
         # 남는 공간을 스트레치로 채운 후 설정 버튼을 맨 오른쪽에 배치
         self.button_layout.addStretch(1)
         self.button_layout.addWidget(self.settings_button)
@@ -396,6 +402,17 @@ class JusawiViewer(QMainWindow):
 
     def rebuild_recent_menu(self):
         build_recent_menu(self)
+        # 로그 메뉴 구성
+        try:
+            self.log_menu.clear()
+            act_open = QAction("로그 폴더 열기", self)
+            act_open.triggered.connect(self._open_logs_folder)
+            self.log_menu.addAction(act_open)
+            act_export = QAction("로그 내보내기(.zip)", self)
+            act_export.triggered.connect(self._export_logs_zip)
+            self.log_menu.addAction(act_export)
+        except Exception:
+            pass
 
     def _open_recent_folder(self, dir_path: str):
         if not dir_path or not os.path.isdir(dir_path):
@@ -416,6 +433,35 @@ class JusawiViewer(QMainWindow):
         self.recent_folders = []
         self.save_settings()
         self.rebuild_recent_menu()
+
+    # 로그: 폴더 열기/ZIP 내보내기
+    def _open_logs_folder(self):
+        ok, err = open_logs_folder()
+        try:
+            if ok:
+                self.statusBar().showMessage("로그 폴더를 열었습니다.", 2000)
+            else:
+                self.statusBar().showMessage(err or "로그 폴더를 열 수 없습니다.", 3000)
+        except Exception:
+            pass
+
+    def _export_logs_zip(self):
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            default_name = suggest_logs_zip_name()
+            dest, _ = QFileDialog.getSaveFileName(self, "로그 내보내기", default_name, "Zip Files (*.zip)")
+        except Exception:
+            dest = ""
+        if not dest:
+            return
+        ok, err = export_logs_zip(dest)
+        try:
+            if ok:
+                self.statusBar().showMessage("로그를 내보냈습니다.", 2000)
+            else:
+                self.statusBar().showMessage(err or "로그 내보내기에 실패했습니다.", 3000)
+        except Exception:
+            pass
 
     # Drag & Drop 지원: 유틸
     def _handle_dropped_files(self, files):
@@ -803,6 +849,10 @@ class JusawiViewer(QMainWindow):
                 self.image_display_area.set_animation_state(False)
             except Exception:
                 pass
+        try:
+            self.log.info("apply_loaded | file=%s | source=%s | anim=%s", os.path.basename(path), source, bool(is_anim))
+        except Exception:
+            pass
         self.load_successful = True
         self.current_image_path = path
         self.update_window_title(path)
@@ -1224,6 +1274,10 @@ class JusawiViewer(QMainWindow):
     def open_file(self):
         file_path = open_file_dialog_util(self, getattr(self, "last_open_dir", ""))
         if file_path:
+            try:
+                self.log.info("open_dialog_selected | file=%s", os.path.basename(file_path))
+            except Exception:
+                pass
             success = self.load_image(file_path, source='open')
             if success:
                 try:
@@ -1231,6 +1285,10 @@ class JusawiViewer(QMainWindow):
                     if parent_dir and os.path.isdir(parent_dir):
                         self.last_open_dir = parent_dir
                         self.save_settings()
+                        try:
+                            self.log.info("open_dialog_applied_last_dir | dir=%s", os.path.basename(parent_dir))
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -1238,13 +1296,29 @@ class JusawiViewer(QMainWindow):
         # Dirty 체크 후 정책 실행
         if self._is_dirty and self.current_image_path and os.path.normcase(file_path) != os.path.normcase(self.current_image_path):
             if not self._handle_dirty_before_action():
+                try:
+                    self.log.info("load_image_aborted_dirty | new=%s | cur=%s", os.path.basename(file_path), os.path.basename(self.current_image_path or ""))
+                except Exception:
+                    pass
                 return False
+        try:
+            self.log.info("load_image_start | src=%s | source=%s", os.path.basename(file_path), source)
+        except Exception:
+            pass
         # 동기 로딩 경로
         path, img, success, _ = self.image_service.load(file_path)
         if success and img is not None:
             self._apply_loaded_image(path, img, source)
+            try:
+                self.log.info("load_image_ok | file=%s | w=%d | h=%d", os.path.basename(path), int(img.width()), int(img.height()))
+            except Exception:
+                pass
             return True
         # 실패 처리
+        try:
+            self.log.error("load_image_fail | file=%s", os.path.basename(file_path))
+        except Exception:
+            pass
         self.load_successful = False
         self.current_image_path = None
         self.image_files_in_dir = []
@@ -1701,6 +1775,10 @@ class JusawiViewer(QMainWindow):
         self._set_global_shortcuts_enabled(True)
 
     def scan_directory(self, dir_path):
+        try:
+            self.log.info("scan_dir_start | dir=%s", os.path.basename(dir_path or ""))
+        except Exception:
+            pass
         self.image_files_in_dir, self.current_image_index = self.image_service.scan_directory(dir_path, self.current_image_path)
         # 폴더만 열어 현재 선택된 파일이 없을 때 첫 이미지로 기본 설정
         try:
@@ -1711,6 +1789,10 @@ class JusawiViewer(QMainWindow):
                 self.current_image_index = 0
         self.update_button_states()
         self.update_status_left()
+        try:
+            self.log.info("scan_dir_done | dir=%s | count=%d | cur=%d", os.path.basename(dir_path or ""), len(self.image_files_in_dir), int(self.current_image_index))
+        except Exception:
+            pass
 
     def _rescan_current_dir(self):
         """현재 폴더를 재스캔하여 파일 목록을 최신화한다."""
@@ -1760,6 +1842,10 @@ class JusawiViewer(QMainWindow):
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
+        try:
+            self.log.info("window_close")
+        except Exception:
+            pass
         try:
             self.save_last_session()
         except Exception:

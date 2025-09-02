@@ -2,6 +2,9 @@ import os
 from PyQt6.QtCore import QUrl
 
 from ..utils.file_utils import SUPPORTED_FORMATS
+from ..utils.logging_setup import get_logger
+
+_log = get_logger("ui.dnd")
 
 
 def _is_supported_image(path: str) -> bool:
@@ -21,8 +24,16 @@ def handle_dropped_files(viewer, files: list[str]) -> None:
             seen.add(p)
             clean_files.append(p)
     if not clean_files:
+        try:
+            _log.info("dnd_drop_rejected | reason=no_supported_images | n=%d", len(files or []))
+        except Exception:
+            pass
         viewer.statusBar().showMessage("지원하는 이미지 파일이 없습니다.", 3000)
         return
+    try:
+        _log.info("dnd_drop_accept | n=%d | first=%s", len(clean_files), os.path.basename(clean_files[0]))
+    except Exception:
+        pass
     viewer.image_files_in_dir = clean_files
     viewer.current_image_index = 0
     viewer.load_image(viewer.image_files_in_dir[viewer.current_image_index], source='drop')
