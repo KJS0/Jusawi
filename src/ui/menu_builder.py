@@ -19,3 +19,12 @@ def rebuild_recent_menu(viewer) -> None:
     viewer.recent_menu.addAction(clear_act)
 
 
+def rebuild_log_menu(viewer) -> None:
+    viewer.log_menu.clear()
+    act_open = QAction("로그 폴더 열기", viewer)
+    act_open.triggered.connect(viewer._open_logs_folder)
+    viewer.log_menu.addAction(act_open)
+    act_export = QAction("로그 내보내기(.zip)", viewer)
+    act_export.triggered.connect(viewer._export_logs_zip)
+    viewer.log_menu.addAction(act_export)
+

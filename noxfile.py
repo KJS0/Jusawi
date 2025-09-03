@@ -1,4 +1,4 @@
-import nox
+import nox  # type: ignore[import]
 
 
 @nox.session(python=False)
@@ -29,5 +29,21 @@ def format(session):
 def typecheck(session):
     session.install("mypy")
     session.run("mypy", "src")
+
+
+@nox.session
+def dev(session):
+    """소스 변경 시 자동 재실행(Hot restart)."""
+    session.install("-r", "requirements.txt", "-r", "requirements-dev.txt")
+    session.install("watchfiles")
+    session.run("python", "-m", "watchfiles", "python main.py", "src", external=True)
+
+
+@nox.session
+def test_watch(session):
+    """테스트 자동 재실행."""
+    session.install("-r", "requirements.txt", "-r", "requirements-dev.txt")
+    session.install("pytest-watch")
+    session.run("ptw", "-q", external=True)
 
 

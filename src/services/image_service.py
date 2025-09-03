@@ -6,6 +6,7 @@ from PyQt6.QtGui import QImage, QImageReader, QTransform, QColorSpace  # type: i
 
 from ..utils.file_utils import scan_directory_util, safe_write_bytes
 from .metadata_service import extract_metadata, encode_with_metadata
+from .save_service import SaveService
 from ..utils.logging_setup import get_logger
 
 _log = get_logger("svc.ImageService")
@@ -134,10 +135,8 @@ class ImageService(QObject):
         self._preload_generation = 0
         # 애니메이션 정보 캐시: path -> frame_count(>1이면 애니메이션), -1 미상/계산 실패
         self._anim_frame_count: dict[str, int] = {}
-        # 저장 비동기 상태
-        self._save_thread: QThread | None = None
-        self._save_worker: _SaveWorker | None = None
-        self._save_token: _CancellationToken | None = None
+        # 저장 위임 서비스
+        self._save_service = SaveService()
 
     def scan_directory(self, dir_path: str, current_image_path: str | None):
         return scan_directory_util(dir_path, current_image_path)
@@ -459,54 +458,10 @@ class ImageService(QObject):
                    quality: int,
                    on_progress: Callable[[int], None] | None,
                    on_done: Callable[[bool, str], None] | None) -> None:
-        """이미지 저장을 백그라운드에서 수행. 진행률 콜백(0-100), 완료 콜백 제공."""
-        try:
-            # 기존 저장 작업 취소 및 정리
-            self.cancel_save()
-        except Exception:
-            pass
-        token = _CancellationToken()
-        worker = _SaveWorker(img, src_path, dest_path, rotation_degrees, flip_horizontal, flip_vertical, quality, token)
-        thread = QThread()
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        def _cleanup():
-            try:
-                thread.quit()
-                thread.wait(2000)
-            except Exception:
-                pass
-            try:
-                worker.deleteLater()
-            except Exception:
-                pass
-            try:
-                thread.deleteLater()
-            except Exception:
-                pass
-            self._save_worker = None
-            self._save_thread = None
-            self._save_token = None
-        worker.progress.connect(lambda p: on_progress(p) if callable(on_progress) else None)
-        worker.done.connect(lambda ok, err: (on_done(ok, err) if callable(on_done) else None))
-        worker.done.connect(_cleanup)
-        thread.start()
-        self._save_worker = worker
-        self._save_thread = thread
-        self._save_token = token
+        self._save_service.save_async(img, src_path, dest_path, rotation_degrees, flip_horizontal, flip_vertical, quality, on_progress, on_done)
 
     def cancel_save(self) -> None:
-        try:
-            if self._save_token:
-                self._save_token.cancel()
-        except Exception:
-            pass
-        try:
-            if self._save_thread and self._save_thread.isRunning():
-                # 스레드에 종료 신호
-                self._save_thread.requestInterruption()
-        except Exception:
-            pass
+        self._save_service.cancel_save()
 
     def save_with_transform(self,
                             img: QImage,
@@ -516,49 +471,7 @@ class ImageService(QObject):
                             flip_horizontal: bool,
                             flip_vertical: bool,
                             quality: int = 95) -> tuple[bool, str]:
-        """
-        안전 저장 + 메타데이터 보존.
-        - 픽셀에 변환 적용 후 Orientation=1로 정규화된 EXIF과 ICC/XMP 가능하면 유지
-        - 임시 파일에 기록 후 원자 교체(Windows: ReplaceFileW)
-        """
-        try:
-            rot = _normalize_rotation(rotation_degrees)
-            q = _sanitize_quality(quality)
-            transformed = _apply_transform(img, rot, bool(flip_horizontal), bool(flip_vertical))
-
-            # Pillow로 인코딩하기 위해 QImage -> bytes (RGBA) 추출 후 PIL 로딩
-            from PIL import Image as PILImage  # type: ignore
-
-            fmt = _guess_format_from_path(dest_path)
-            if not fmt:
-                fmt = 'JPEG'
-            # QImage를 RGBA 바이트로 변환
-            qt_format = QImage.Format.Format_RGBA8888
-            if transformed.format() != qt_format:
-                converted = transformed.convertToFormat(qt_format)
-            else:
-                converted = transformed
-            width = converted.width()
-            height = converted.height()
-            ptr = converted.bits()
-            ptr.setsize(converted.sizeInBytes())
-            raw = bytes(ptr)
-            pil_image = PILImage.frombytes('RGBA', (width, height), raw)
-            if fmt.upper() == 'JPEG':
-                pil_image = pil_image.convert('RGB')
-
-            # 메타데이터 추출/정규화
-            meta = extract_metadata(src_path)
-            ok, encoded_bytes, err = encode_with_metadata(pil_image, fmt, q, meta)
-            if not ok:
-                return False, err or "인코딩 실패"
-
-            ok2, err2 = safe_write_bytes(dest_path, encoded_bytes, write_through=True, retries=6)
-            if not ok2:
-                return False, err2 or "원자적 저장 실패"
-            return True, ""
-        except Exception as e:
-            return False, str(e)
+        return self._save_service.save_with_transform(img, src_path, dest_path, rotation_degrees, flip_horizontal, flip_vertical, quality)
 
 
 def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]:
