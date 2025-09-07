@@ -593,6 +593,15 @@ class JusawiViewer(QMainWindow):
     def open_shortcuts_help(self):
         dlg.open_shortcuts_help(self)
 
+    def open_exif_dialog(self):
+        dlg.open_exif_dialog(self)
+
+    def open_ai_analysis_dialog(self):
+        dlg.open_ai_analysis_dialog(self)
+
+    def open_natural_search_dialog(self):
+        dlg.open_natural_search_dialog(self)
+
     def scan_directory(self, dir_path):
         try:
             self.log.info("scan_dir_start | dir=%s", os.path.basename(dir_path or ""))

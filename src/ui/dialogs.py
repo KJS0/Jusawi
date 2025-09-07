@@ -54,3 +54,84 @@ def open_shortcuts_help(viewer: "JusawiViewer") -> None:
     viewer._set_global_shortcuts_enabled(True)
 
 
+# NEW: EXIF dialog opener
+
+def open_exif_dialog(viewer: "JusawiViewer") -> None:
+    if not getattr(viewer, "current_image_path", None):
+        try:
+            from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+            QMessageBox.information(viewer, "사진 정보", "먼저 사진을 열어주세요.")
+        except Exception:
+            pass
+        return
+    try:
+        viewer._set_global_shortcuts_enabled(False)
+    except Exception:
+        pass
+    try:
+        from .exif_dialog import ExifDialog
+        d = ExifDialog(viewer, image_path=viewer.current_image_path)
+        d.resize(720, 520)
+        d.exec()
+    except Exception:
+        pass
+    finally:
+        try:
+            viewer._set_global_shortcuts_enabled(True)
+        except Exception:
+            pass
+
+
+def open_ai_analysis_dialog(viewer: "JusawiViewer") -> None:
+    if not getattr(viewer, "current_image_path", None):
+        try:
+            from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+            QMessageBox.information(viewer, "AI 분석", "먼저 사진을 열어주세요.")
+        except Exception:
+            pass
+        return
+    try:
+        viewer._set_global_shortcuts_enabled(False)
+    except Exception:
+        pass
+    try:
+        from .ai_analysis_dialog import AIAnalysisDialog
+        d = AIAnalysisDialog(viewer, image_path=viewer.current_image_path)
+        d.resize(760, 600)
+        d.exec()
+    except Exception:
+        pass
+    finally:
+        try:
+            viewer._set_global_shortcuts_enabled(True)
+        except Exception:
+            pass
+
+
+def open_natural_search_dialog(viewer: "JusawiViewer") -> None:
+    try:
+        viewer._set_global_shortcuts_enabled(False)
+    except Exception:
+        pass
+    try:
+        from .natural_search_dialog import NaturalSearchDialog
+        d = NaturalSearchDialog(viewer)
+        d.resize(800, 520)
+        try:
+            d.show()  # 일부 플랫폼에서 첫 표시로 포커스 문제 회피
+        except Exception:
+            pass
+        d.exec()
+    except Exception:
+        try:
+            from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+            QMessageBox.critical(viewer, "자연어 검색", "검색 창을 여는 중 오류가 발생했습니다. 콘솔 로그를 확인하세요.")
+        except Exception:
+            pass
+    finally:
+        try:
+            viewer._set_global_shortcuts_enabled(True)
+        except Exception:
+            pass
+
+
