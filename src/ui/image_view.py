@@ -147,7 +147,8 @@ class ImageView(QGraphicsView):
             s = float(src_scale)
         except Exception:
             s = 1.0
-        if s <= 0:
+        # 너무 작은 값은 UI 표시 오류를 유발하므로 하한 보정
+        if s <= 0.01:
             s = 1.0
         self._source_scale = s
         # 현재 뷰 스케일을 유지하되, 아이템 로컬 트랜스폼으로 1/src_scale 적용

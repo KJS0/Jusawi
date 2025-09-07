@@ -212,22 +212,116 @@ class ImageService(QObject):
             cached = self._scaled_cache.get(key)
             if cached is not None and not cached.isNull():
                 return cached
-            # 원본 확보
+            # 1) 원본이 이미 캐시에 있으면 빠른 경로: 메모리 내에서 스케일
             base = self._img_cache.get(path)
-            if base is None or base.isNull():
-                _, base, ok, _ = self.load(path)
-                if not ok or base is None or base.isNull():
+            if base is not None and not base.isNull():
+                bw = int(round(base.width() * qscale * dprf))
+                bh = int(round(base.height() * qscale * dprf))
+                if bw < 1 or bh < 1:
                     return None
-            bw = int(round(base.width() * qscale * dprf))
-            bh = int(round(base.height() * qscale * dprf))
-            if bw < 1 or bh < 1:
+                scaled = base.scaled(bw, bh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                if scaled.isNull():
+                    return None
+                self._scaled_cache.put(key, scaled)
+                return scaled
+
+            # 2) 원본 미보유: QImageReader 스케일 디코딩 경로로 풀해상도 디코드 회피
+            try:
+                reader = QImageReader(path)
+                reader.setAutoTransform(True)
+                # 원본(오토트랜스폼 반영) 해상도 조회
+                try:
+                    orig_size = reader.size()
+                    ow = int(getattr(orig_size, 'width')() if hasattr(orig_size, 'width') else int(orig_size.width()))
+                    oh = int(getattr(orig_size, 'height')() if hasattr(orig_size, 'height') else int(orig_size.height()))
+                except Exception:
+                    ow = 0
+                    oh = 0
+                if ow <= 0 or oh <= 0:
+                    # 사이즈 조회 실패 시 마지막 폴백: 직접 읽고 크기 확인(여전히 스케일 디코드 시도)
+                    # 다만 이 경우 풀해상도 잠재 비용이 발생할 수 있음
+                    pass
+                # 목표 크기 산출(비율 유지)
+                bw = max(1, int(round(max(1.0, ow) * qscale * dprf))) if ow > 0 else 0
+                bh = max(1, int(round(max(1.0, oh) * qscale * dprf))) if oh > 0 else 0
+                if bw > 0 and bh > 0:
+                    from PyQt6.QtCore import QSize  # type: ignore[import]
+                    reader.setScaledSize(QSize(bw, bh))
+                img = reader.read()
+                if img.isNull():
+                    return None
+                img = _convert_to_srgb(img)
+                self._scaled_cache.put(key, img)
+                return img
+            except Exception:
                 return None
-            # 다운스케일 수행(가로세로 비율 유지)
-            scaled = base.scaled(bw, bh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            if scaled.isNull():
+        except Exception:
+            return None
+
+    def get_scaled_for_viewport(self, path: str, viewport_width: int, viewport_height: int,
+                                 view_mode: str = "fit", dpr: float = 1.0, headroom: float = 1.0) -> Optional[QImage]:
+        """뷰포트/DPR/뷰모드 기준으로 목표 크기를 산출해 QImageReader 스케일 디코딩.
+        - view_mode: 'fit' | 'fit_width' | 'fit_height'
+        - headroom: 1.0 이상이면 약간 크게 읽어 미세 줌인 시 재디코드 빈도 감소
+        - 캐시 키는 내부적으로 s(비율)과 dpr을 조합해 재사용
+        """
+        try:
+            if not path:
                 return None
-            self._scaled_cache.put(key, scaled)
-            return scaled
+            vw = max(1, int(viewport_width))
+            vh = max(1, int(viewport_height))
+            try:
+                dprf = float(dpr)
+            except Exception:
+                dprf = 1.0
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            try:
+                osize = reader.size()
+                ow = int(osize.width())
+                oh = int(osize.height())
+            except Exception:
+                ow = 0
+                oh = 0
+            if ow <= 0 or oh <= 0:
+                return None
+            # 원하는 화면 픽셀(장치 픽셀 기준)
+            target_w_px = vw * dprf
+            target_h_px = vh * dprf
+            # 모드별 스케일 산출(오토트랜스폼 반영된 ow/oh 기준)
+            if view_mode == 'fit_width':
+                s = target_w_px / float(ow)
+            elif view_mode == 'fit_height':
+                s = target_h_px / float(oh)
+            else:
+                s = min(target_w_px / float(ow), target_h_px / float(oh))
+            # 업스케일 금지
+            s = max(0.01, min(1.0, s))
+            # 헤드룸
+            try:
+                hr = float(headroom)
+            except Exception:
+                hr = 1.0
+            if hr < 1.0:
+                hr = 1.0
+            s = min(1.0, s * hr)
+            qscale = self._quantize_scale(s)
+            # 캐시 키 구성
+            key = f"{path}|s={int(round(qscale * 1000))}|dpr={int(round(dprf * 100))}"
+            cached = self._scaled_cache.get(key)
+            if cached is not None and not cached.isNull():
+                return cached
+            # 목표 크기
+            from PyQt6.QtCore import QSize  # type: ignore[import]
+            bw = max(1, int(round(ow * qscale * dprf)))
+            bh = max(1, int(round(oh * qscale * dprf)))
+            reader.setScaledSize(QSize(bw, bh))
+            img = reader.read()
+            if img.isNull():
+                return None
+            img = _convert_to_srgb(img)
+            self._scaled_cache.put(key, img)
+            return img
         except Exception:
             return None
 

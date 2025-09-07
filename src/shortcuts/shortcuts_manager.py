@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Callable
 
 from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import Qt
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,8 @@ COMMANDS: List[Command] = [
     Command("delete_current_image", "파일 삭제", "현재 파일을 휴지통으로", "파일", "delete_current_image", ["Delete"]),
 
     Command("show_prev_image", "이전 이미지", "이전 파일로 이동", "탐색", "show_prev_image", ["Left", "PageUp"]),
-    Command("show_next_image", "다음 이미지", "다음 파일로 이동", "탐색", "show_next_image", ["Right", "PageDown", "Space"]),
+    # Space는 애니메이션 재생/일시정지용으로 사용하므로 기본 매핑에서 제외
+    Command("show_next_image", "다음 이미지", "다음 파일로 이동", "탐색", "show_next_image", ["Right", "PageDown"]),
     Command("show_first_image", "첫 이미지", "첫 파일로 이동", "탐색", "show_first_image", ["Home"]),
     Command("show_last_image", "마지막 이미지", "마지막 파일로 이동", "탐색", "show_last_image", ["End"]),
 
@@ -45,6 +47,9 @@ COMMANDS: List[Command] = [
     # 편집 히스토리
     Command("undo", "실행 취소", "마지막 편집 취소", "편집", "undo_action", ["Ctrl+Z"]),
     Command("redo", "다시 실행", "취소한 편집 다시 실행", "편집", "redo_action", ["Ctrl+Y", "Ctrl+Shift+Z"]),
+
+    # 애니메이션 토글: Space 고정(다른 명령에 할당 금지)
+    Command("toggle_animation", "애니메이션 토글", "재생/일시정지 전환", "보기", "anim_toggle_play", ["Space"], lock_key=True),
 
     # 도움말(F1)은 고정
     Command("help_shortcuts", "단축키 도움말", "현재 단축키 표시", "도움말", "open_shortcuts_help", ["F1"], lock_key=True),
@@ -111,8 +116,16 @@ def apply_shortcuts(viewer) -> None:
         if not callable(handler):
             continue
         for key in eff.get(cmd.id, []) or []:
+            # Space는 애니메이션 토글 전용으로 허용하고, 다른 명령에는 사용 금지
+            if key and key.strip().lower() == "space" and cmd.id != "toggle_animation":
+                continue
             try:
                 sc = QShortcut(QKeySequence(key), viewer)
+                if cmd.id == "toggle_animation":
+                    try:
+                        sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                    except Exception:
+                        pass
                 sc.activated.connect(handler)
                 viewer._shortcuts.append(sc)
             except Exception:

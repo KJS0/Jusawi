@@ -23,8 +23,8 @@ from . import event_handlers as ev
 from .fullscreen_controller import enter_fullscreen as fs_enter_fullscreen, exit_fullscreen as fs_exit_fullscreen
 from .menu_builder import rebuild_recent_menu as build_recent_menu
 from .menu_builder import rebuild_log_menu as build_log_menu
-from ..shortcuts.shortcuts import setup_shortcuts as setup_shortcuts_ext
 from ..shortcuts.shortcuts_manager import apply_shortcuts as apply_shortcuts_ext
+from ..dnd.event_filters import DnDEventFilter
 from ..services.session_service import save_last_session as save_session_ext, restore_last_session as restore_session_ext
 from ..storage.settings_store import load_settings as load_settings_ext, save_settings as save_settings_ext
 from ..utils.navigation import NavigationController, show_prev_image as nav_show_prev_image, show_next_image as nav_show_next_image, load_image_at_current_index as nav_load_image_at_current_index, update_button_states as nav_update_button_states
@@ -105,6 +105,12 @@ class JusawiViewer(QMainWindow):
         self.setAcceptDrops(True)
         central_widget.setAcceptDrops(True)
         central_widget.installEventFilter(self)
+        # DnD 이벤트 필터 설치(윈도우/중앙/뷰포트에서 일관 처리)
+        try:
+            self._dnd_filter = DnDEventFilter(self)
+            central_widget.installEventFilter(self._dnd_filter)
+        except Exception:
+            pass
 
         self.main_layout = QVBoxLayout(central_widget)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
@@ -121,9 +127,17 @@ class JusawiViewer(QMainWindow):
         try:
             self.image_display_area.viewport().setAcceptDrops(True)
             self.image_display_area.viewport().installEventFilter(self)
+            try:
+                self.image_display_area.viewport().installEventFilter(self._dnd_filter)
+            except Exception:
+                pass
         except Exception:
             pass
         self.image_display_area.installEventFilter(self)
+        try:
+            self.image_display_area.installEventFilter(self._dnd_filter)
+        except Exception:
+            pass
         self.main_layout.addWidget(self.image_display_area, 1)
 
         # 이미지 서비스
@@ -146,8 +160,8 @@ class JusawiViewer(QMainWindow):
         self._fullres_upgrade_timer = QTimer(self)
         self._fullres_upgrade_timer.setSingleShot(True)
         self._fullres_upgrade_timer.timeout.connect(self._upgrade_to_fullres_if_needed)
-        # 사용자 요청: 100% 이하 배율에서 썸네일 캐싱/표시를 비활성화하고 항상 원본을 사용
-        self._disable_scaled_cache_below_100 = True
+        # 100% 이하 배율에서도 스케일 디코딩/캐시를 적극 활용하여 대용량 표시 성능 개선
+        self._disable_scaled_cache_below_100 = False
         # DPR/모니터 변경 시 재적용 트리거 설정 (표시 후에도 보장되도록 별도 보조 메서드 사용)
         self._screen_signal_connected = False
         try:
@@ -162,6 +176,10 @@ class JusawiViewer(QMainWindow):
         self._scale_apply_delay_ms = 30
         # 원본 풀해상도 이미지 보관(저장/고배율 표시용)
         self._fullres_image = None
+        # 현재 픽스맵이 스케일 프리뷰인지 여부(원본 업그레이드 필요 판단용)
+        self._is_scaled_preview = False
+        # 직전 프레임이 원본으로 업그레이드 된 직후인지(스케일 적용 전 깜빡임 방지)
+        self._just_upgraded_fullres = False
         # 프리로드 설정(다음/이전 1장씩)
         self._preload_radius = 1
 
@@ -491,12 +509,7 @@ class JusawiViewer(QMainWindow):
 
     def setup_shortcuts(self):
         """키보드 단축키 설정"""
-        setup_shortcuts_ext(self)
-        # 사용자 지정 키 매핑 적용(설정 변경 후에도 재호출 가능)
-        try:
-            apply_shortcuts_ext(self)
-        except Exception:
-            pass
+        apply_shortcuts_ext(self)
 
     def _apply_ui_theme_and_spacing(self):
         apply_theme(self)
@@ -596,6 +609,23 @@ class JusawiViewer(QMainWindow):
         self.update_status_left()
         try:
             self.log.info("scan_dir_done | dir=%s | count=%d | cur=%d", os.path.basename(dir_path or ""), len(self.image_files_in_dir), int(self.current_image_index))
+        except Exception:
+            pass
+        # 디렉터리 변경/정렬 이후에도 현재 표시가 썸네일이면 원본 업그레이드를 예약
+        try:
+            if self.load_successful and self.current_image_path and not self._is_current_file_animation():
+                need_upgrade = False
+                if getattr(self, "_fullres_image", None) is None or self._fullres_image.isNull():
+                    need_upgrade = True
+                else:
+                    cur_pix = self.image_display_area.originalPixmap()
+                    if cur_pix and not cur_pix.isNull():
+                        if cur_pix.width() < self._fullres_image.width() or cur_pix.height() < self._fullres_image.height():
+                            need_upgrade = True
+                if need_upgrade:
+                    if self._fullres_upgrade_timer.isActive():
+                        self._fullres_upgrade_timer.stop()
+                    self._fullres_upgrade_timer.start(120)
         except Exception:
             pass
 

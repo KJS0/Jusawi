@@ -24,7 +24,22 @@ def update_status_left(viewer) -> None:
         size_str = "-"
     w = h = depth = 0
     pix = viewer.image_display_area.originalPixmap()
-    if pix and not pix.isNull():
+    # 자연 해상도 우선 표기(다운샘플 표시 중에도 원본 해상도로 표기)
+    try:
+        nat_w = int(getattr(viewer.image_display_area, "_natural_width", 0) or 0)
+        nat_h = int(getattr(viewer.image_display_area, "_natural_height", 0) or 0)
+    except Exception:
+        nat_w = nat_h = 0
+    if nat_w > 0 and nat_h > 0:
+        w, h = nat_w, nat_h
+        try:
+            # 비트 심도는 현재 픽스맵으로 추정
+            if pix and not pix.isNull():
+                img = pix.toImage()
+                depth = compute_display_bit_depth(img)
+        except Exception:
+            depth = 0
+    elif pix and not pix.isNull():
         w = pix.width()
         h = pix.height()
         try:
@@ -43,6 +58,31 @@ def update_status_left(viewer) -> None:
         cs = ""
     cs_disp = f" [{cs}]" if cs else ""
     viewer.status_left_label.setText(f"{idx_disp}/{total} {filename} {size_str} {dims}{cs_disp}")
+    # 현재 표시가 썸네일이면 원본 업그레이드를 예약(정렬/인덱스 변동 시에도 보장)
+    try:
+        if getattr(viewer, "load_successful", False) and getattr(viewer, "current_image_path", None):
+            if not viewer._is_current_file_animation() and not getattr(viewer, "_movie", None):
+                need_upgrade = False
+                fullimg = getattr(viewer, "_fullres_image", None)
+                if fullimg is None or fullimg.isNull():
+                    need_upgrade = True
+                else:
+                    try:
+                        cur_pix = viewer.image_display_area.originalPixmap()
+                        if cur_pix and not cur_pix.isNull():
+                            if cur_pix.width() < fullimg.width() or cur_pix.height() < fullimg.height():
+                                need_upgrade = True
+                    except Exception:
+                        pass
+                if need_upgrade:
+                    try:
+                        if viewer._fullres_upgrade_timer.isActive():
+                            viewer._fullres_upgrade_timer.stop()
+                        viewer._fullres_upgrade_timer.start(120)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
 
 
 def update_status_right(viewer) -> None:

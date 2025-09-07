@@ -30,6 +30,18 @@ class NavigationController:
         viewer = self._viewer
         if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
             viewer.load_image(viewer.image_files_in_dir[viewer.current_image_index], source='nav')
+            # 내비게이션으로 전환된 경우에도 원본 업그레이드를 확실히 예약
+            try:
+                if viewer.load_successful and not viewer._is_current_file_animation() and not getattr(viewer, "_movie", None):
+                    if viewer._fullres_upgrade_timer.isActive():
+                        viewer._fullres_upgrade_timer.stop()
+                    # 빠른 전환 중 과도한 디코드 폭주 방지를 위해 약간의 텀
+                    viewer._fullres_upgrade_timer.start(100)
+                    # 다음 틱이 아닌, 약간의 텀 뒤 업그레이드 시도(키 꾹 누름 대비)
+                    from PyQt6.QtCore import QTimer  # type: ignore[import]
+                    QTimer.singleShot(100, getattr(viewer, "_upgrade_to_fullres_if_needed", lambda: None))
+            except Exception:
+                pass
 
     def update_button_states(self) -> None:
         viewer = self._viewer
@@ -66,6 +78,16 @@ def show_next_image(viewer) -> None:
 def load_image_at_current_index(viewer) -> None:
     if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
         viewer.load_image(viewer.image_files_in_dir[viewer.current_image_index], source='nav')
+        # 함수형 경로에서도 동일하게 업그레이드 예약
+        try:
+            if viewer.load_successful and not viewer._is_current_file_animation() and not getattr(viewer, "_movie", None):
+                if viewer._fullres_upgrade_timer.isActive():
+                    viewer._fullres_upgrade_timer.stop()
+                viewer._fullres_upgrade_timer.start(100)
+                from PyQt6.QtCore import QTimer  # type: ignore[import]
+                QTimer.singleShot(100, getattr(viewer, "_upgrade_to_fullres_if_needed", lambda: None))
+        except Exception:
+            pass
 
 
 def update_button_states(viewer) -> None:
