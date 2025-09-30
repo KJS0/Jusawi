@@ -57,6 +57,48 @@ class EmbeddingsService:
         finally:
             con.close()
 
+    def count_images(self) -> int:
+        """임베딩 인덱스에 저장된 이미지 개수 반환."""
+        con = sqlite3.connect(self._db_path)
+        try:
+            cur = con.cursor()
+            cur.execute("SELECT COUNT(1) FROM images")
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception:
+            return 0
+        finally:
+            con.close()
+
+    def index_paths(self, paths: List[str]) -> Tuple[int, int]:
+        """주어진 경로들에 대해 임베딩을 생성/업서트.
+
+        반환값은 (시도한 개수, 성공 개수).
+        """
+        tried = 0
+        ok_count = 0
+        if not paths:
+            return tried, ok_count
+        # 중복 제거 및 유효 파일만
+        seen: set[str] = set()
+        for p in paths:
+            try:
+                if not p or p in seen:
+                    continue
+                seen.add(p)
+                if not os.path.isfile(p):
+                    continue
+                ext = os.path.splitext(p)[1].lower()
+                if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff', '.gif'):
+                    continue
+                tried += 1
+                if self.upsert_image(p):
+                    ok_count += 1
+            except Exception:
+                tried += 1
+                continue
+        return tried, ok_count
+
     def _load_analysis_json(self, image_path: str) -> Optional[Dict[str, Any]]:
         base, _ = os.path.splitext(image_path)
         json_path = base + "_analysis.json"

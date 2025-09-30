@@ -27,8 +27,8 @@ class VerifierService:
     def __init__(self):
         self._api_key = os.getenv("OPENAI_API_KEY")
         # 기본 모델은 gpt-4o 계열 권장
-        m = os.getenv("AI_VERIFY_MODEL", "gpt-4o").strip()
-        self._model = m if m else "gpt-4o"
+        m = os.getenv("AI_VERIFY_MODEL", "gpt-5-nano").strip()
+        self._model = m if m else "gpt-5-nano"
         base_dir = os.path.join(os.path.expanduser("~"), ".jusawi")
         try:
             os.makedirs(base_dir, exist_ok=True)
@@ -65,7 +65,14 @@ class VerifierService:
             from .ai_analysis_service import _preprocess_image_for_model  # reuse
         except Exception:
             return None
-        return _preprocess_image_for_model(image_path)
+        # 검증은 더 공격적인 축소/품질로도 충분
+        return _preprocess_image_for_model(
+            image_path,
+            max_side=768,
+            jpeg_quality=75,
+            target_bytes=400000,
+            min_side=384,
+        )
 
     def verify(self, image_path: str, query_text: str) -> Dict[str, Any]:
         if not self._api_key:
@@ -102,7 +109,7 @@ class VerifierService:
             },
         ]
         try:
-            resp = client.chat.completions.create(model=self._model, messages=messages, temperature=0.0)
+            resp = client.chat.completions.create(model=self._model, messages=messages)
             txt = resp.choices[0].message.content or "{}"
             data = json.loads(txt)
             # 최소 필드 보정

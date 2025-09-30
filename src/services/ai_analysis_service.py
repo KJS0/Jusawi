@@ -182,11 +182,43 @@ def _extract_exif_summary(image_path: str) -> Dict[str, Any]:
         return {}
 
 
-def _preprocess_image_for_model(image_path: str, max_side: int = 1024, jpeg_quality: int = 80) -> bytes | None:
-    """이미지를 1024px 장변, sRGB, JPEG Q≈80으로 인코딩하여 바이트로 반환."""
+def _preprocess_image_for_model(
+    image_path: str,
+    max_side: int | None = None,
+    jpeg_quality: int | None = None,
+    target_bytes: int | None = None,
+    min_side: int | None = None,
+) -> bytes | None:
+    """이미지를 sRGB JPEG로 리사이즈/재압축해 바이트로 반환.
+
+    - 기본값은 환경변수로 제어 가능:
+      - AI_IMG_MAX_SIDE (기본 1024, 256~2048 범위)
+      - AI_IMG_MIN_SIDE (기본 512)
+      - AI_IMG_JPEG_QUALITY (기본 80, 40~95 범위)
+      - AI_IMG_TARGET_BYTES (기본 600000)
+    - 크기 예산을 맞추기 위해 품질과 해상도를 점진적으로 낮춤(최대 6회 시도).
+    - JPEG 옵션: optimize=True, progressive=True, subsampling=4:2:0.
+    """
     if Image is None or not os.path.exists(image_path):
         return None
     try:
+        # 환경변수 기반 기본값 로딩
+        def _iv(name: str, default: int) -> int:
+            v = os.getenv(name)
+            try:
+                return int(v) if v is not None and str(v).strip() != "" else default
+            except Exception:
+                return default
+
+        max_side_val = max_side if isinstance(max_side, int) else _iv("AI_IMG_MAX_SIDE", 1024)
+        max_side_val = max(256, min(2048, int(max_side_val)))
+        min_side_val = min_side if isinstance(min_side, int) else _iv("AI_IMG_MIN_SIDE", 512)
+        min_side_val = max(128, min(max_side_val, int(min_side_val)))
+        base_quality = jpeg_quality if isinstance(jpeg_quality, int) else _iv("AI_IMG_JPEG_QUALITY", 80)
+        base_quality = max(40, min(95, int(base_quality)))
+        budget = target_bytes if isinstance(target_bytes, int) else _iv("AI_IMG_TARGET_BYTES", 600000)
+        budget = max(100_000, min(2_000_000, int(budget)))
+
         with Image.open(image_path) as im:
             im = im.convert("RGB")
             # sRGB 변환(ICC 있으면 변환 시도)
@@ -198,14 +230,53 @@ def _preprocess_image_for_model(image_path: str, max_side: int = 1024, jpeg_qual
                     im = ImageCms.profileToProfile(im, src, dst, outputMode="RGB")
             except Exception:
                 pass
+
             w, h = im.size
+            long_side = max(w, h)
             scale = 1.0
-            if max(w, h) > max_side:
-                scale = max_side / float(max(w, h))
-                im = im.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-            buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=int(jpeg_quality), optimize=True, subsampling=0)
-            return buf.getvalue()
+            if long_side > max_side_val:
+                scale = max_side_val / float(long_side)
+                im = im.resize((max(1, int(round(w * scale))), max(1, int(round(h * scale)))), Image.LANCZOS)
+
+            def _encode(img: Image.Image, q: int) -> bytes:
+                buf = io.BytesIO()
+                # subsampling=2 -> 4:2:0, progressive로 전송 최적화
+                img.save(buf, format="JPEG", quality=int(q), optimize=True, subsampling=2, progressive=True)
+                return buf.getvalue()
+
+            # 1차 시도: 기본 품질로
+            out = _encode(im, base_quality)
+            if len(out) <= budget:
+                return out
+
+            # 2차: 품질 단계 하향, 그래도 크면 해상도도 단계 하향
+            quality_steps = [max(40, base_quality - d) for d in (10, 20, 30)]
+            scale_steps = [1.0, 0.85, 0.72, 0.6]
+            tried = 1
+            best_bytes = len(out)
+            best_out = out
+            cur = im
+            for s in scale_steps:
+                if s < 1.0:
+                    nw = max(1, int(round(cur.size[0] * s)))
+                    nh = max(1, int(round(cur.size[1] * s)))
+                    if max(nw, nh) < min_side_val:
+                        break
+                    cur = cur.resize((nw, nh), Image.LANCZOS)
+                for q in quality_steps:
+                    tried += 1
+                    out2 = _encode(cur, q)
+                    blen = len(out2)
+                    if blen < best_bytes:
+                        best_bytes = blen
+                        best_out = out2
+                    if blen <= budget:
+                        return out2
+                    if tried >= 6:
+                        break
+                if tried >= 6:
+                    break
+            return best_out
     except Exception as e:
         try:
             _log.error("preprocess_fail | file=%s | err=%s", os.path.basename(image_path), str(e))

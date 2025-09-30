@@ -121,21 +121,82 @@ class NaturalSearchDialog(QDialog):
             QMessageBox.information(self, "자연어 검색", "질의를 입력하세요.")
             return
         try:
+            # 항상 현재 폴더 기준으로 인덱싱(업서트) 시도 후 검색
+            files = getattr(self._viewer, "image_files_in_dir", []) or []
+            if not files:
+                QMessageBox.information(self, "자연어 검색", "현재 폴더에 인덱싱할 이미지가 없습니다.")
+                return
+            files_set = set(files)
+            # 간단 대기 커서 처리
+            try:
+                from PyQt6.QtWidgets import QApplication  # type: ignore[import]
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            except Exception:
+                QApplication = None  # type: ignore
+            try:
+                self._svc.index_paths(list(files))  # 변경/미인덱스 항목만 업서트됨
+            finally:
+                try:
+                    if 'QApplication' in locals() and QApplication:
+                        QApplication.restoreOverrideCursor()
+                except Exception:
+                    pass
             topk = 100
             # 온라인 임베딩(GPT) 검색
-            results = self._svc.query(q, top_k=topk)
-            # 임베딩 상위 결과를 GPT 비전으로 재검증(필터+재정렬)
+            # 충분한 후보를 먼저 받고, 현재 폴더 파일만 필터링
+            raw = self._svc.query(q, top_k=topk * 5)
+            results = [(p, s) for (p, s) in raw if p in files_set][:topk]
+            # 임베딩 상위 결과를 GPT 비전으로 재검증(필터+재정렬) - 병렬 처리
             verified = []
-            for path, sim in results:
+            try:
+                import concurrent.futures
+            except Exception:
+                concurrent = None  # type: ignore
+            # 상위 후보 N만 검증(환경변수로 조정)
+            try:
+                import os as _os
+                max_verify = int(_os.getenv("AI_VERIFY_TOP", "24") or 24)
+            except Exception:
+                max_verify = 24
+            to_check = results[: max(1, int(max_verify))]
+            # 동시성 제한(기본 4)
+            try:
+                import os as _os2
+                workers = int(_os2.getenv("AI_VERIFY_CONCURRENCY", "8") or 8)
+                workers = max(1, min(8, workers))
+            except Exception:
+                workers = 4
+
+            def _task(item):
+                p, sim = item
                 try:
-                    vr = self._verifier.verify(path, q)
+                    vr = self._verifier.verify(p, q)
                     match = bool(vr.get("match", False))
                     conf = float(vr.get("confidence", 0.0))
                     if match and conf >= 0.6:
                         score = conf * 0.9 + float(sim) * 0.1
-                        verified.append((path, score))
+                        return (p, score)
                 except Exception:
-                    continue
+                    return None
+                return None
+
+            if 'concurrent' in locals() and concurrent:
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                        for res in ex.map(_task, to_check):
+                            if res:
+                                verified.append(res)
+                except Exception:
+                    # 실패 시 순차 폴백
+                    for it in to_check:
+                        r = _task(it)
+                        if r:
+                            verified.append(r)
+            else:
+                for it in to_check:
+                    r = _task(it)
+                    if r:
+                        verified.append(r)
             verified.sort(key=lambda x: x[1], reverse=True)
             self._fill_results(verified or results)
         except Exception as e:
