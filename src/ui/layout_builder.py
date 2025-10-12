@@ -9,7 +9,7 @@ def build_top_and_status_bars(viewer) -> None:
     # Menus
     from PyQt6.QtWidgets import QMenu  # type: ignore[import]
     viewer.recent_menu = QMenu(viewer)
-    viewer.log_menu = QMenu(viewer)
+    # 로그 버튼/메뉴 제거
 
     # Buttons and layout
     viewer.button_layout = QHBoxLayout()
@@ -19,8 +19,7 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.recent_button = QPushButton("최근 파일")
     viewer.recent_button.setMenu(viewer.recent_menu)
 
-    viewer.log_button = QPushButton("로그")
-    viewer.log_button.setMenu(viewer.log_menu)
+    # 로그 버튼 제거
 
     # NEW: Info (EXIF) button
     viewer.info_button = QPushButton("정보")
@@ -30,9 +29,9 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.ai_button = QPushButton("AI 분석")
     viewer.ai_button.clicked.connect(viewer.open_ai_analysis_dialog)
 
-    # NEW: Natural language search button
-    viewer.search_button = QPushButton("검색")
-    viewer.search_button.clicked.connect(viewer.open_natural_search_dialog)
+    # NEW: Natural language search button (비활성화)
+    # viewer.search_button = QPushButton("검색")
+    # viewer.search_button.clicked.connect(viewer.open_natural_search_dialog)
 
     viewer.settings_button = QPushButton("설정")
     viewer.settings_button.clicked.connect(viewer.open_settings_dialog)
@@ -48,7 +47,15 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.zoom_out_button = QPushButton("축소")
     viewer.zoom_out_button.clicked.connect(viewer.zoom_out)
     viewer.fit_button = QPushButton("100%")
-    viewer.fit_button.clicked.connect(viewer.reset_to_100)
+    # 일부 환경에서 viewer.reset_to_100 바인딩 시점 문제 회피: 직접 ImageView 메서드로 연결
+    try:
+        viewer.fit_button.clicked.connect(viewer.image_display_area.reset_to_100)
+    except Exception:
+        # 폴백: 뷰어 메서드가 있으면 사용
+        try:
+            viewer.fit_button.clicked.connect(viewer.reset_to_100)
+        except Exception:
+            pass
     viewer.zoom_in_button = QPushButton("확대")
     viewer.zoom_in_button.clicked.connect(viewer.zoom_in)
 
@@ -77,7 +84,7 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.button_layout.addWidget(viewer.recent_button)
     viewer.button_layout.addWidget(viewer.info_button)
     viewer.button_layout.addWidget(viewer.ai_button)
-    viewer.button_layout.addWidget(viewer.search_button)
+    # 자연어 검색 버튼 제거
     viewer.button_layout.addWidget(viewer.fullscreen_button)
     viewer.button_layout.addWidget(viewer.prev_button)
     viewer.button_layout.addWidget(viewer.next_button)
@@ -86,7 +93,6 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.button_layout.addWidget(viewer.zoom_in_button)
     viewer.button_layout.addWidget(viewer.rotate_left_button)
     viewer.button_layout.addWidget(viewer.rotate_right_button)
-    viewer.button_layout.addWidget(viewer.log_button)
     viewer.button_layout.addStretch(1)
     viewer.button_layout.addWidget(viewer.settings_button)
 

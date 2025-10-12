@@ -1,7 +1,7 @@
 import sys
 import os
 from PyQt6.QtWidgets import QApplication  # type: ignore[import]
-from src.ui.main_window import JusawiViewer 
+from src.ui.main_window import JusawiViewer
 from src.utils.logging_setup import setup_logging, get_logger, shutdown_logging
 
 def _mask_args(argv):

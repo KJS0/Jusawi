@@ -158,92 +158,12 @@ def apply_scaled_pixmap_now(viewer: "JusawiViewer") -> None:
             pass
         viewer._last_dpr = dpr
         return
+    # 프리뷰/스케일 디코딩 경로 완전 비활성화: 항상 풀해상도 픽스맵만 사용
     try:
-        # 업그레이드 직후 한 틱 동안은 썸네일 재요청을 막아 깜빡임 방지
-        if getattr(viewer, "_just_upgraded_fullres", False):
-            scaled = None
-        else:
-            # 자유 모드에서는 현재 배율 기반 캐시를 우선, 맞춤 계열에서는 뷰포트 기반 스케일 디코드를 우선
-            if view_mode in ("fit", "fit_width", "fit_height"):
-                vp = viewer.image_display_area.viewport().rect()
-                vw = int(max(1, vp.width()))
-                vh = int(max(1, vp.height()))
-                scaled = viewer.image_service.get_scaled_for_viewport(
-                    viewer.current_image_path, vw, vh, view_mode=view_mode, dpr=dpr, headroom=1.1
-                )
-                if (scaled is None or scaled.isNull()) and cur_scale < 1.0:
-                    scaled = viewer.image_service.get_scaled_image(viewer.current_image_path, cur_scale, dpr)
-            else:
-                scaled = viewer.image_service.get_scaled_image(viewer.current_image_path, cur_scale, dpr)
-    except Exception:
-        scaled = None
-    if scaled is None or scaled.isNull():
-        try:
-            if getattr(viewer, "_fullres_image", None) is not None and not viewer._fullres_image.isNull():
-                pm_fb = QPixmap.fromImage(viewer._fullres_image)
-                viewer.image_display_area.updatePixmapFrame(pm_fb)
-                viewer.image_display_area.set_source_scale(1.0)
-        except Exception:
-            pass
-        if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):
-            try:
-                viewer.image_display_area.apply_current_view_mode()
-            except Exception:
-                pass
-        try:
-            if item_anchor_point is not None and getattr(viewer.image_display_area, "_pix_item", None):
-                new_scene_point = viewer.image_display_area._pix_item.mapToScene(item_anchor_point)
-                viewer.image_display_area.centerOn(new_scene_point)
-        except Exception:
-            pass
-        viewer._last_dpr = dpr
-        if getattr(viewer, "_in_dpr_transition", False):
-            return
-        return
-    try:
-        base_w = int(viewer._fullres_image.width()) if getattr(viewer, "_fullres_image", None) else 0
-        base_h = int(viewer._fullres_image.height()) if getattr(viewer, "_fullres_image", None) else 0
-        sw = int(scaled.width())
-        sh = int(scaled.height())
-        if base_w > 0 and base_h > 0:
-            s_w = (sw / float(base_w)) / float(dpr)
-            s_h = (sh / float(base_h)) / float(dpr)
-            src_scale = max(0.01, min(1.0, min(s_w, s_h)))
-        else:
-            # 풀해상도 미보유 시 현재 픽스맵을 자연 해상도로 간주
-            src_scale = 1.0
-    except Exception:
-        src_scale = 1.0
-    try:
-        pm_scaled = QPixmap.fromImage(scaled)
-        viewer.image_display_area.updatePixmapFrame(pm_scaled)
-        # 자연 해상도가 이미 세팅되어 있으면 그 기준으로 정확한 소스 스케일 재계산
-        try:
-            nat_w = int(getattr(viewer.image_display_area, "_natural_width", 0) or 0)
-            nat_h = int(getattr(viewer.image_display_area, "_natural_height", 0) or 0)
-            if nat_w > 0 and nat_h > 0:
-                dpr2 = float(viewer.image_display_area.viewport().devicePixelRatioF())
-                s_w2 = (pm_scaled.width() / float(nat_w)) / float(dpr2)
-                s_h2 = (pm_scaled.height() / float(nat_h)) / float(dpr2)
-                src_scale = max(0.01, min(1.0, min(s_w2, s_h2)))
-        except Exception:
-            pass
-        viewer.image_display_area.set_source_scale(src_scale)
-        if not getattr(viewer.image_display_area, "_natural_width", 0):
-            try:
-                if getattr(viewer, "_fullres_image", None):
-                    viewer.image_display_area._natural_width = int(viewer._fullres_image.width())
-                    viewer.image_display_area._natural_height = int(viewer._fullres_image.height())
-            except Exception:
-                pass
-        # 좌표 즉시 갱신(현재 커서 위치 기준)
-        try:
-            from PyQt6.QtCore import QPointF  # type: ignore[import]
-            from PyQt6.QtGui import QCursor  # type: ignore[import]
-            vp_point = viewer.image_display_area.viewport().mapFromGlobal(QCursor.pos())
-            viewer.image_display_area._emit_cursor_pos_at_viewport_point(QPointF(vp_point))
-        except Exception:
-            pass
+        if getattr(viewer, "_fullres_image", None) is not None and not viewer._fullres_image.isNull():
+            pm_fb = QPixmap.fromImage(viewer._fullres_image)
+            viewer.image_display_area.updatePixmapFrame(pm_fb)
+            viewer.image_display_area.set_source_scale(1.0)
     except Exception:
         pass
     if dpr_changed and view_mode in ("fit", "fit_width", "fit_height"):

@@ -109,29 +109,11 @@ def open_ai_analysis_dialog(viewer: "JusawiViewer") -> None:
 
 
 def open_natural_search_dialog(viewer: "JusawiViewer") -> None:
+    # 비활성화: 자연어 검색 기능 제거
     try:
-        viewer._set_global_shortcuts_enabled(False)
+        from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+        QMessageBox.information(viewer, "자연어 검색", "자연어 검색 기능이 비활성화되었습니다.")
     except Exception:
         pass
-    try:
-        from .natural_search_dialog import NaturalSearchDialog
-        d = NaturalSearchDialog(viewer)
-        d.resize(800, 520)
-        try:
-            d.show()  # 일부 플랫폼에서 첫 표시로 포커스 문제 회피
-        except Exception:
-            pass
-        d.exec()
-    except Exception:
-        try:
-            from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
-            QMessageBox.critical(viewer, "자연어 검색", "검색 창을 여는 중 오류가 발생했습니다. 콘솔 로그를 확인하세요.")
-        except Exception:
-            pass
-    finally:
-        try:
-            viewer._set_global_shortcuts_enabled(True)
-        except Exception:
-            pass
 
 

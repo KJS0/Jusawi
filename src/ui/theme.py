@@ -66,6 +66,26 @@ def apply_ui_theme_and_spacing(viewer) -> None:
             viewer.settings_button,
         ]:
             btn.setStyleSheet(button_style)
+        # 다크 테마에서 AI 분석/검색은 흰색을 명시적으로 강제
+        if resolved == 'dark':
+            try:
+                viewer.ai_button.setStyleSheet("color: #FFFFFF; background-color: transparent;")
+            except Exception:
+                pass
+            try:
+                viewer.search_button.setStyleSheet("color: #FFFFFF; background-color: transparent;")
+            except Exception:
+                pass
+        else:
+            # 라이트 테마에서는 전체 버튼과 동일 색 적용
+            try:
+                viewer.ai_button.setStyleSheet(button_style)
+            except Exception:
+                pass
+            try:
+                viewer.search_button.setStyleSheet(button_style)
+            except Exception:
+                pass
     except Exception:
         pass
     try:

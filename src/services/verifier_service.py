@@ -68,21 +68,30 @@ class VerifierService:
         # 검증은 더 공격적인 축소/품질로도 충분
         return _preprocess_image_for_model(
             image_path,
-            max_side=768,
-            jpeg_quality=75,
-            target_bytes=400000,
-            min_side=384,
+            max_side=512,
+            jpeg_quality=60,
+            target_bytes=200000,
+            min_side=256,
         )
 
     def verify(self, image_path: str, query_text: str) -> Dict[str, Any]:
         if not self._api_key:
             return {"match": False, "confidence": 0.0, "reasons": "API 키 없음"}
+        import time
+        t0 = time.monotonic()
         img = self._preprocess(image_path)
         if not img:
             return {"match": False, "confidence": 0.0, "reasons": "이미지 전처리 실패"}
+        t1 = time.monotonic()
         key = _sha1(img) + "|" + _sha1(query_text.encode("utf-8"))
         if key in self._cache:
-            return dict(self._cache[key])
+            out = dict(self._cache[key])
+            if os.getenv("AI_VERIFY_LOG", "0") == "1":
+                try:
+                    _log.info("verify_cache_hit | file=%s | conf=%.3f | dt_pre=%.3fs", os.path.basename(image_path), float(out.get("confidence",0.0)), (t1-t0))
+                except Exception:
+                    pass
+            return out
 
         # 프롬프트: 간결/정확/JSON 강제
         system_msg = (
@@ -96,7 +105,11 @@ class VerifierService:
 
         import base64
         from openai import OpenAI  # type: ignore
-        client = OpenAI(api_key=self._api_key)
+        try:
+            timeout_s = float(os.getenv("AI_VERIFY_TIMEOUT", "6") or 6)
+        except Exception:
+            timeout_s = 6.0
+        client = OpenAI(api_key=self._api_key, timeout=timeout_s)
         b64 = base64.b64encode(img).decode("ascii")
         messages = [
             {"role": "system", "content": system_msg},
@@ -109,7 +122,9 @@ class VerifierService:
             },
         ]
         try:
+            t2 = time.monotonic()
             resp = client.chat.completions.create(model=self._model, messages=messages)
+            t3 = time.monotonic()
             txt = resp.choices[0].message.content or "{}"
             data = json.loads(txt)
             # 최소 필드 보정
@@ -119,6 +134,11 @@ class VerifierService:
                 "reasons": str(data.get("reasons", "")),
             }
             self._save_cache(key, out)
+            if os.getenv("AI_VERIFY_LOG", "0") == "1":
+                try:
+                    _log.info("verify_ok | file=%s | conf=%.3f | dt_pre=%.3fs | dt_api=%.3fs", os.path.basename(image_path), float(out.get("confidence",0.0)), (t1-t0), (t3-t2))
+                except Exception:
+                    pass
             return out
         except Exception as e:
             try:
@@ -129,8 +149,13 @@ class VerifierService:
 
     @staticmethod
     def pass_threshold(conf: float, mode: str) -> bool:
-        # mode: loose/normal/strict
-        t = 0.5 if mode == "loose" else (0.75 if mode == "strict" else 0.6)
+        # mode: loose/normal/strict (정확도 우선으로 상향)
+        if mode == "strict":
+            t = 0.75
+        elif mode == "loose":
+            t = 0.50
+        else:
+            t = 0.65
         try:
             return float(conf) >= float(t)
         except Exception:

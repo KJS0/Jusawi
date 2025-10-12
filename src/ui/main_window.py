@@ -183,6 +183,8 @@ class JusawiViewer(QMainWindow):
         # 프리로드 설정(다음/이전 1장씩)
         self._preload_radius = 1
 
+        # 자연어 검색/임베딩 관련 기능 제거됨
+
         build_top_and_status_bars(self)
 
         # 회전 버튼은 위에서 생성됨
@@ -620,6 +622,7 @@ class JusawiViewer(QMainWindow):
             self.log.info("scan_dir_done | dir=%s | count=%d | cur=%d", os.path.basename(dir_path or ""), len(self.image_files_in_dir), int(self.current_image_index))
         except Exception:
             pass
+        # 자연어 검색/인덱싱 관련 로직 제거됨
         # 디렉터리 변경/정렬 이후에도 현재 표시가 썸네일이면 원본 업그레이드를 예약
         try:
             if self.load_successful and self.current_image_path and not self._is_current_file_animation():
@@ -664,19 +667,3 @@ class JusawiViewer(QMainWindow):
             self._nav.update_button_states()
         else:
             nav_update_button_states(self)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        ev.resize(self, event)
-
-    def reset_to_100(self):
-        viewer_cmd.reset_to_100(self)
-
-    # QGraphicsView 기반을 사용하므로 별도 이벤트 필터 불필요
-    def eventFilter(self, obj, event):
-        # 세부 DnD 처리는 DnDEventFilter에서 담당
-        return super().eventFilter(obj, event)
-
-    def closeEvent(self, event):
-        lifecycle.on_close(self)
-        super().closeEvent(event)

@@ -5,7 +5,11 @@ import io
 import json
 import base64
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
+import hashlib
+import pathlib
+import time
+import random
 
 try:
     from PIL import Image, ImageCms  # type: ignore
@@ -210,26 +214,34 @@ def _preprocess_image_for_model(
             except Exception:
                 return default
 
+        FAST = os.getenv("AI_FAST_MODE", "0") == "1"
         max_side_val = max_side if isinstance(max_side, int) else _iv("AI_IMG_MAX_SIDE", 1024)
+        if FAST:
+            max_side_val = min(max_side_val, 768)
         max_side_val = max(256, min(2048, int(max_side_val)))
         min_side_val = min_side if isinstance(min_side, int) else _iv("AI_IMG_MIN_SIDE", 512)
         min_side_val = max(128, min(max_side_val, int(min_side_val)))
         base_quality = jpeg_quality if isinstance(jpeg_quality, int) else _iv("AI_IMG_JPEG_QUALITY", 80)
+        if FAST:
+            base_quality = min(base_quality, 70)
         base_quality = max(40, min(95, int(base_quality)))
         budget = target_bytes if isinstance(target_bytes, int) else _iv("AI_IMG_TARGET_BYTES", 600000)
+        if FAST:
+            budget = min(budget, 350000)
         budget = max(100_000, min(2_000_000, int(budget)))
 
         with Image.open(image_path) as im:
             im = im.convert("RGB")
-            # sRGB 변환(ICC 있으면 변환 시도)
-            try:
-                prof = im.info.get("icc_profile")
-                if ImageCms is not None and prof:
-                    src = ImageCms.ImageCmsProfile(io.BytesIO(prof))
-                    dst = ImageCms.createProfile("sRGB")
-                    im = ImageCms.profileToProfile(im, src, dst, outputMode="RGB")
-            except Exception:
-                pass
+            # sRGB 변환(ICC 있으면 변환 시도) — FAST 모드에서는 건너뜀
+            if not FAST:
+                try:
+                    prof = im.info.get("icc_profile")
+                    if ImageCms is not None and prof:
+                        src = ImageCms.ImageCmsProfile(io.BytesIO(prof))
+                        dst = ImageCms.createProfile("sRGB")
+                        im = ImageCms.profileToProfile(im, src, dst, outputMode="RGB")
+                except Exception:
+                    pass
 
             w, h = im.size
             long_side = max(w, h)
@@ -246,7 +258,7 @@ def _preprocess_image_for_model(
 
             # 1차 시도: 기본 품질로
             out = _encode(im, base_quality)
-            if len(out) <= budget:
+            if len(out) <= budget or FAST:
                 return out
 
             # 2차: 품질 단계 하향, 그래도 크면 해상도도 단계 하향
@@ -318,28 +330,127 @@ class AIAnalysisService:
     def __init__(self):
         self._provider = os.getenv("AI_PROVIDER", "openai")
         # 안전한 기본값과 허용 목록 적용
-        env_model = (os.getenv("AI_MODEL", "gpt-5") or "").strip()
-        allowed_models = {"gpt-5"}
-        self._model = env_model if env_model in allowed_models else "gpt-5"
+        env_model = (os.getenv("AI_MODEL", "gpt-5-nano") or "").strip()
+        allowed_models = {"gpt-5", "gpt-5-nano"}
+        self._model = env_model if env_model in allowed_models else "gpt-5-nano"
         self._api_key = os.getenv("OPENAI_API_KEY")
 
-    def analyze(self, image_path: str, context: Optional[AnalysisContext] = None) -> Dict[str, Any]:
+    def analyze(
+        self,
+        image_path: str,
+        context: Optional[AnalysisContext] = None,
+        progress_cb: Optional[Callable[[int, str], None]] = None,
+        is_cancelled: Optional[Callable[[], bool]] = None,
+    ) -> Dict[str, Any]:
+        def _p(p: int, msg: str) -> None:
+            try:
+                if progress_cb:
+                    progress_cb(int(p), str(msg))
+            except Exception:
+                pass
+        def _c() -> bool:
+            try:
+                return bool(is_cancelled and is_cancelled())
+            except Exception:
+                return False
+
         ctx = context or AnalysisContext()
-        exif_summary = _extract_exif_summary(image_path)
+        FAST = os.getenv("AI_FAST_MODE", "0") == "1"
+        _p(5, "EXIF 요약 추출")
+        exif_summary = {} if FAST else _extract_exif_summary(image_path)
+        if _c():
+            return self._fallback_result(exif_summary, note="사용자 취소")
+        _p(10, "프롬프트 구성")
         user_prompt = _build_prompt(ctx, exif_summary)
+        # 캐시 조회
+        try:
+            key = self._cache_key(image_path, ctx)
+            cpath = self._cache_path(key)
+            cached = self._load_cache(cpath)
+            if cached is not None:
+                _p(95, "캐시 적중")
+                _p(100, "완료")
+                return cached
+        except Exception:
+            pass
+        _p(20, "이미지 전처리")
         img_bytes = _preprocess_image_for_model(image_path)
         if img_bytes is None:
             return self._fallback_result(exif_summary, note="이미지 전처리에 실패하여 텍스트 전용으로 폴백")
+        if _c():
+            return self._fallback_result(exif_summary, note="사용자 취소")
 
         try:
-            result = self._call_openai(image_bytes=img_bytes, prompt=user_prompt, context=ctx)
-            return self._validate_and_normalize(result, exif_summary)
+            _p(60, "AI 모델 호출")
+            result = self._call_openai_with_retry(image_bytes=img_bytes, prompt=user_prompt, context=ctx, progress=_p, is_cancelled=_c)
+            if _c():
+                return self._fallback_result(exif_summary, note="사용자 취소")
+            _p(90, "결과 검증")
+            out = self._validate_and_normalize(result, exif_summary)
+            # 캐시 저장
+            try:
+                self._save_cache(cpath, out)
+            except Exception:
+                pass
+            _p(100, "완료")
+            return out
         except Exception as e:
             try:
                 _log.warning("ai_call_fallback | err=%s", str(e))
             except Exception:
                 pass
             return self._fallback_result(exif_summary, note=f"폴백: {type(e).__name__}")
+
+    def _cache_key(self, path: str, ctx: AnalysisContext) -> str:
+        try:
+            st = os.stat(path)
+            fast = os.getenv("AI_FAST_MODE", "0")
+            sig = f"{path}|{st.st_mtime_ns}|{ctx.language}|{ctx.long_caption_chars}|{ctx.short_caption_words}|{ctx.purpose}|{ctx.tone}|{self._model}|fast={fast}"
+            return hashlib.sha1(sig.encode("utf-8")).hexdigest()
+        except Exception:
+            return hashlib.sha1((path + "|fallback").encode("utf-8")).hexdigest()
+
+    def _cache_path(self, key: str) -> str:
+        base = pathlib.Path(os.getenv("AI_CACHE_DIR", os.path.join(os.path.expanduser("~"), ".jusawi_ai_cache")))
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return str(base / f"{key}.json")
+
+    def _load_cache(self, path: str) -> Optional[Dict[str, Any]]:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+
+    def _save_cache(self, path: str, data: Dict[str, Any]) -> None:
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _call_openai_with_retry(self, image_bytes: bytes, prompt: str, context: AnalysisContext,
+                                 progress: Callable[[int, str], None], is_cancelled: Callable[[], bool]) -> Dict[str, Any]:
+        max_attempts = int(os.getenv("AI_RETRY", "2"))
+        base_delay = float(os.getenv("AI_RETRY_DELAY", "0.8"))
+        last_err: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            if is_cancelled():
+                raise RuntimeError("취소됨")
+            try:
+                progress(60, f"모델 호출 시도 {attempt}/{max_attempts}")
+                return self._call_openai(image_bytes=image_bytes, prompt=prompt, context=context)
+            except Exception as e:
+                last_err = e
+                if attempt >= max_attempts:
+                    break
+                delay = base_delay * (2 ** (attempt - 1)) * (0.8 + 0.4 * random.random())
+                progress(60, f"재시도 대기 {delay:.1f}s")
+                time.sleep(delay)
+        raise last_err if last_err else RuntimeError("알 수 없는 오류")
 
     def _call_openai(self, image_bytes: bytes, prompt: str, context: AnalysisContext) -> Dict[str, Any]:
         if not self._api_key:
@@ -370,7 +481,11 @@ class AIAnalysisService:
             raise RuntimeError(f"openai SDK 로드 실패: {e}")
 
         from openai import OpenAI  # type: ignore
-        client = OpenAI(api_key=self._api_key)
+        try:
+            timeout_s = float(os.getenv("AI_HTTP_TIMEOUT", "20"))
+        except Exception:
+            timeout_s = 20.0
+        client = OpenAI(api_key=self._api_key, timeout=timeout_s)
 
         # 1) Chat Completions 멀티모달 경로(권장)
         try:
@@ -401,7 +516,8 @@ class AIAnalysisService:
                     _log.warning("openai_chat_fail | model=%s | err=%s", self._model, str(e))
                 except Exception:
                     pass
-            pass
+            # 실패는 상위 재시도/폴백으로 넘긴다
+            raise
 
         # Responses API는 사용하지 않음
 

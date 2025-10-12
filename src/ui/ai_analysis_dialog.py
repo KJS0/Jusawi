@@ -1,19 +1,44 @@
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Dict
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
-    QPlainTextEdit, QWidget, QTabWidget, QMessageBox, QFileDialog
+    QWidget, QTabWidget, QMessageBox, QProgressDialog
 )  # type: ignore[import]
-from PyQt6.QtCore import Qt  # type: ignore[import]
+from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal  # type: ignore[import]
 
 from ..services.ai_analysis_service import AIAnalysisService, AnalysisContext
 from ..utils.logging_setup import get_logger
 
 _log = get_logger("ui.AIAnalysisDialog")
+
+
+class _AnalysisWorker(QObject):
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(dict, str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, service: AIAnalysisService, image_path: str, ctx: AnalysisContext, is_cancelled_callable):
+        super().__init__()
+        self._service = service
+        self._image_path = image_path
+        self._ctx = ctx
+        self._cancel = is_cancelled_callable
+
+    def run(self):
+        try:
+            data = self._service.analyze(
+                self._image_path,
+                context=self._ctx,
+                progress_cb=lambda p, m: self.progress.emit(int(p), str(m)),
+                is_cancelled=lambda: bool(self._cancel()),
+            )
+            # 취소 시에도 일관되게 finished로 넘겨 UI가 정리되도록 함
+            self.finished.emit(data, "ok")
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class AIAnalysisDialog(QDialog):
@@ -23,6 +48,9 @@ class AIAnalysisDialog(QDialog):
         self._image_path = image_path or ""
         self._service = AIAnalysisService()
         self._data: Dict[str, Any] = {}
+        self._thread: QThread | None = None
+        self._worker: _AnalysisWorker | None = None
+        self._cancel_flag = False
 
         root = QVBoxLayout(self)
         try:
@@ -44,25 +72,13 @@ class AIAnalysisDialog(QDialog):
         root.addWidget(title)
         root.addWidget(sub)
 
-        # Tabs: Summary(JSON) and Captions
-        self.tabs = QTabWidget(self)
-        root.addWidget(self.tabs, 1)
-
-        # JSON view
-        self.json_edit = QPlainTextEdit(self)
-        try:
-            self.json_edit.setReadOnly(True)
-        except Exception:
-            pass
-        self.tabs.addTab(self.json_edit, "JSON")
-
-        # Captions view
+        # 캡션/태그만 표시
         self.captions_view = QTextEdit(self)
         try:
             self.captions_view.setReadOnly(True)
         except Exception:
             pass
-        self.tabs.addTab(self.captions_view, "요약")
+        root.addWidget(self.captions_view, 1)
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -70,111 +86,123 @@ class AIAnalysisDialog(QDialog):
         self.analyze_btn.clicked.connect(self._on_analyze)
         btn_row.addWidget(self.analyze_btn)
 
-        copy_btn = QPushButton("JSON 복사")
-        copy_btn.clicked.connect(self._copy_json)
-        btn_row.addWidget(copy_btn)
-
-        save_btn = QPushButton("JSON 저장")
-        save_btn.clicked.connect(self._save_json)
-        btn_row.addWidget(save_btn)
-
         btn_row.addStretch(1)
         close_btn = QPushButton("닫기")
-        close_btn.clicked.connect(self.accept)
+        close_btn.clicked.connect(self._on_close)
         btn_row.addWidget(close_btn)
         root.addLayout(btn_row)
 
+        # 진행률/취소 가능한 로딩창 준비(필요 시 표시)
+        self._progress = QProgressDialog("AI 분석 준비 중...", "중지", 0, 100, self)
+        try:
+            self._progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+            self._progress.canceled.connect(self._on_cancel)
+            self._progress.reset()
+            self._progress.hide()
+        except Exception:
+            pass
+
         if self._image_path:
-            # 자동 1회 분석 실행 (UX 단순화)
             try:
                 self._on_analyze()
             except Exception:
                 pass
 
+    def _on_cancel(self):
+        self._cancel_flag = True
+        try:
+            self._progress.setLabelText("취소 중...")
+        except Exception:
+            pass
+
+    def _is_cancelled(self) -> bool:
+        return bool(self._cancel_flag)
+
     def _on_analyze(self):
         if not self._image_path or not os.path.exists(self._image_path):
             QMessageBox.warning(self, "AI 분석", "유효한 파일이 없습니다.")
             return
+        if self._thread is not None:
+            return
+        self._cancel_flag = False
+        self._progress.setValue(0)
+        self._progress.setLabelText("분석 시작")
+        self._progress.show()
+
+        self._thread = QThread(self)
+        self._worker = _AnalysisWorker(self._service, self._image_path, AnalysisContext(), self._is_cancelled)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.failed.connect(self._on_failed)
+        self._thread.start()
+
+    def _on_progress(self, p: int, msg: str):
         try:
-            ctx = AnalysisContext()
-            data = self._service.analyze(self._image_path, context=ctx)
-            self._data = data
-            self._render(data)
-        except Exception as e:
-            try:
-                _log.error("analyze_fail | err=%s", str(e))
-            except Exception:
-                pass
-            QMessageBox.warning(self, "AI 분석", f"분석 실패: {e}")
+            self._progress.setValue(int(max(0, min(100, p))))
+            if msg:
+                self._progress.setLabelText(str(msg))
+        except Exception:
+            pass
+
+    def _on_finished(self, data: Dict[str, Any], status: str):
+        self._cleanup_worker()
+        self._data = data or {}
+        self._render(data or {})
+        try:
+            self._progress.hide()
+        except Exception:
+            pass
+
+    def _on_failed(self, err: str):
+        self._cleanup_worker()
+        try:
+            self._progress.hide()
+        except Exception:
+            pass
+        QMessageBox.warning(self, "AI 분석", f"분석 실패: {err}")
+
+    def _cleanup_worker(self):
+        try:
+            if self._worker:
+                self._worker.deleteLater()
+        except Exception:
+            pass
+        try:
+            if self._thread:
+                self._thread.quit()
+                self._thread.wait(1000)
+                self._thread.deleteLater()
+        except Exception:
+            pass
+        self._thread = None
+        self._worker = None
 
     def _render(self, data: Dict[str, Any]):
-        try:
-            self.json_edit.setPlainText(json.dumps(data, ensure_ascii=False, indent=2))
-        except Exception:
-            self.json_edit.setPlainText("{}")
-        # Captions summary
+        # 사용자가 원한 단순 표기: 짧은 캡션, 긴 캡션, 태그, 주제만
         sc = str(data.get("short_caption") or "").strip()
         lc = str(data.get("long_caption") or "").strip()
         tags = data.get("tags") or []
         subj = data.get("subjects") or []
-        lines = []
+        lines: list[str] = []
         if sc:
-            lines.append(f"short: {sc}")
+            lines.append(f"짧은 캡션 : {sc}")
         if lc:
-            lines.append("")
-            lines.append(lc)
+            lines.append(f"긴 캡션 : {lc}")
         if tags:
-            lines.append("")
-            lines.append("tags: " + ", ".join([str(t) for t in tags]))
+            lines.append("태그 : " + ", ".join([str(t) for t in tags]))
         if subj:
-            lines.append("subjects: " + ", ".join([str(s) for s in subj]))
+            lines.append("주제 : " + ", ".join([str(s) for s in subj]))
         self.captions_view.setPlainText("\n".join(lines))
 
-    def _copy_json(self):
-        try:
-            from PyQt6.QtWidgets import QApplication  # type: ignore
-            cb = QApplication.clipboard()
-            cb.setText(self.json_edit.toPlainText())
-            QMessageBox.information(self, "AI 분석", "JSON을 클립보드에 복사했습니다.")
-        except Exception:
-            pass
+        # JSON 보기/저장은 제거됨
 
-    def _save_json(self):
-        try:
-            text = self.json_edit.toPlainText()
-            data = json.loads(text) if text.strip() else (self._data or {})
-        except Exception:
-            QMessageBox.warning(self, "AI 분석", "JSON 형식이 올바르지 않습니다.")
-            return
-        if not self._validate_schema(data):
-            QMessageBox.warning(self, "AI 분석", "스키마가 불완전합니다. 저장을 계속합니다.")
-        path, _ = QFileDialog.getSaveFileName(self, "JSON 저장", os.path.splitext(self._image_path or "result")[0] + "_analysis.json", "JSON (*.json)")
-        if not path:
-            return
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "AI 분석", "JSON을 저장했습니다.")
-        except Exception as e:
-            QMessageBox.warning(self, "AI 분석", f"저장 실패: {e}")
-
-    def _validate_schema(self, data: Dict[str, Any]) -> bool:
-        try:
-            ok = True
-            ok = ok and isinstance(data.get("short_caption", ""), str)
-            ok = ok and isinstance(data.get("long_caption", ""), str)
-            ok = ok and isinstance(data.get("tags", []), list)
-            ok = ok and isinstance(data.get("subjects", []), list)
-            cam = data.get("camera_settings", {})
-            ok = ok and isinstance(cam, dict)
-            gps = data.get("gps", {})
-            ok = ok and isinstance(gps, dict)
-            safety = data.get("safety", {"nsfw": False, "sensitive": []})
-            ok = ok and isinstance(safety, dict)
-            ok = ok and isinstance(data.get("confidence", 0.0), (int, float))
-            ok = ok and isinstance(data.get("notes", ""), str)
-            return bool(ok)
-        except Exception:
-            return False
+    def _on_close(self):
+        if self._thread is not None:
+            # 로딩창을 끄면 로딩 중단: 취소 플래그를 올리고 워커 정리
+            self._on_cancel()
+            self._cleanup_worker()
+        self.accept()
 
 
