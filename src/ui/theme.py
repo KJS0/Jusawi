@@ -55,6 +55,7 @@ def apply_ui_theme_and_spacing(viewer) -> None:
         for btn in [
             viewer.open_button,
             viewer.recent_button,
+            getattr(viewer, 'info_button', None),
             viewer.fullscreen_button,
             viewer.prev_button,
             viewer.next_button,
@@ -65,7 +66,8 @@ def apply_ui_theme_and_spacing(viewer) -> None:
             viewer.rotate_right_button,
             viewer.settings_button,
         ]:
-            btn.setStyleSheet(button_style)
+            if btn:
+                btn.setStyleSheet(button_style)
         # 다크 테마에서 AI 분석/검색은 흰색을 명시적으로 강제
         if resolved == 'dark':
             try:

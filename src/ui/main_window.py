@@ -1,8 +1,8 @@
 import os
 import sys
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu  # type: ignore[import]
-from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent  # type: ignore[import]
-from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap, QMovie, QColorSpace  # type: ignore[import]
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu, QTextEdit  # type: ignore[import]
+from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent, QUrl  # type: ignore[import]
+from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap, QMovie, QColorSpace, QDesktopServices  # type: ignore[import]
 
 from .image_view import ImageView
 from . import commands as viewer_cmd
@@ -138,7 +138,43 @@ class JusawiViewer(QMainWindow):
             self.image_display_area.installEventFilter(self._dnd_filter)
         except Exception:
             pass
-        self.main_layout.addWidget(self.image_display_area, 1)
+        # 메인 콘텐츠 영역: 이미지 + 정보 패널(우측)
+        self.content_widget = QWidget(central_widget)
+        self.content_layout = QHBoxLayout(self.content_widget)
+        try:
+            self.content_layout.setContentsMargins(0, 0, 0, 0)
+            self.content_layout.setSpacing(6)
+        except Exception:
+            pass
+        self.content_layout.addWidget(self.image_display_area, 1)
+        # 정보 패널 (텍스트 + 지도 미리보기)
+        self.info_panel = QWidget(self.content_widget)
+        self.info_panel_layout = QVBoxLayout(self.info_panel)
+        try:
+            self.info_panel_layout.setContentsMargins(0, 0, 0, 0)
+            self.info_panel_layout.setSpacing(6)
+        except Exception:
+            pass
+        self.info_text = QTextEdit(self.info_panel)
+        try:
+            self.info_text.setReadOnly(True)
+            self.info_text.setMinimumWidth(280)
+            self.info_text.setStyleSheet("QTextEdit { color: #EAEAEA; background-color: #2B2B2B; border: 1px solid #444; }")
+        except Exception:
+            pass
+        self.info_map_label = QLabel(self.info_panel)
+        try:
+            self.info_map_label.setFixedSize(720, 440)
+            self.info_map_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.info_map_label.setStyleSheet("QLabel { background-color: #2B2B2B; color: #AAAAAA; border: 1px solid #444; }")
+            self.info_map_label.setText("지도 미리보기")
+        except Exception:
+            pass
+        self.info_panel_layout.addWidget(self.info_text)
+        self.info_panel_layout.addWidget(self.info_map_label)
+        self.info_panel.setVisible(False)
+        self.content_layout.addWidget(self.info_panel)
+        self.main_layout.addWidget(self.content_widget, 1)
 
         # 이미지 서비스
         self.image_service = ImageService(self)
@@ -523,6 +559,22 @@ class JusawiViewer(QMainWindow):
         else:
             self.enter_fullscreen()
 
+    def mousePressEvent(self, event):
+        try:
+            # 지도 클릭 시 구글맵 링크 열기
+            if event is not None and getattr(self, "info_map_label", None) is not None:
+                # 라벨 영역 클릭일 때만 링크 오픈
+                if self.info_map_label.isVisible() and self.info_panel.isVisible():
+                    if self.info_map_label.rect().contains(self.info_map_label.mapFrom(self, event.position().toPoint())):
+                        link = self.info_map_label.toolTip() if hasattr(self.info_map_label, 'toolTip') else ""
+                        if link and isinstance(link, str) and link.startswith("http"):
+                            QDesktopServices.openUrl(QUrl(link))
+                            event.accept()
+                            return
+        except Exception:
+            pass
+        super().mousePressEvent(event)
+
     def enter_fullscreen(self):
         """전체화면 모드 진입 (애니메이션 없이)"""
         fs_enter_fullscreen(self)
@@ -602,6 +654,285 @@ class JusawiViewer(QMainWindow):
 
     def open_natural_search_dialog(self):
         dlg.open_natural_search_dialog(self)
+
+    # ----- 정보 패널 -----
+    def toggle_info_panel(self) -> None:
+        try:
+            target = getattr(self, "info_tabs", None) or getattr(self, "info_text", None)
+            visible = not bool(target.isVisible()) if target is not None else True
+        except Exception:
+            visible = True
+        try:
+            if getattr(self, "info_panel", None) is not None:
+                self.info_panel.setVisible(visible)
+        except Exception:
+            pass
+        if visible:
+            try:
+                self.update_info_panel()
+            except Exception:
+                pass
+
+    def _format_bytes(self, num_bytes: int) -> str:
+        try:
+            n = float(num_bytes)
+        except Exception:
+            return "-"
+        units = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        while n >= 1024.0 and i < len(units) - 1:
+            n /= 1024.0
+            i += 1
+        if i == 0:
+            return f"{int(n)} {units[i]}"
+        return f"{n:.2f} {units[i]}"
+
+    def _safe_frac_to_float(self, v):
+        try:
+            # Fraction/IFDRational
+            if hasattr(v, "numerator") and hasattr(v, "denominator"):
+                num = float(getattr(v, "numerator"))
+                den = float(getattr(v, "denominator"))
+                if den == 0:
+                    return None
+                return num / den
+            # (num, den)
+            if isinstance(v, (tuple, list)) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
+                if float(v[1]) == 0:
+                    return None
+                return float(v[0]) / float(v[1])
+            s = str(v)
+            if "/" in s:
+                a, b = s.split("/", 1)
+                fa, fb = float(a), float(b)
+                if fb != 0:
+                    return fa / fb
+            return float(s)
+        except Exception:
+            return None
+
+    def update_info_panel(self) -> None:
+        path = self.current_image_path or ""
+        if not path or not os.path.exists(path):
+            try:
+                if getattr(self, "info_text", None) is not None:
+                    self.info_text.setPlainText("")
+                if getattr(self, "info_map_label", None) is not None:
+                    self.info_map_label.setText("지도 미리보기")
+            except Exception:
+                pass
+            return
+        # 파일/이미지 기본 정보
+        file_name = os.path.basename(path)
+        dir_name = os.path.dirname(path)
+        try:
+            size_bytes = os.path.getsize(path)
+        except Exception:
+            size_bytes = 0
+        try:
+            w = int(getattr(self, "_fullres_image", None).width()) if getattr(self, "_fullres_image", None) is not None else 0
+            h = int(getattr(self, "_fullres_image", None).height()) if getattr(self, "_fullres_image", None) is not None else 0
+            if w <= 0 or h <= 0:
+                px = self.image_display_area.originalPixmap()
+                if px is not None and not px.isNull():
+                    w = int(px.width())
+                    h = int(px.height())
+        except Exception:
+            w = h = 0
+        mp_text = "-"
+        try:
+            if w > 0 and h > 0:
+                mp = (w * h) / 1_000_000.0
+                mp_text = f"{mp:.1f}MP"
+        except Exception:
+            pass
+
+        # EXIF 요약: 유틸의 포맷 텍스트를 그대로 사용(정보 패널과 1:1 연계)
+        summary_text = ""
+        try:
+            from ..services.exif_utils import extract_with_pillow, format_summary_text  # type: ignore
+            exif_raw = extract_with_pillow(path) or {}
+            summary_text = format_summary_text(exif_raw, path)
+        except Exception:
+            summary_text = ""
+
+        # 노출 보정(EV) 추가 시도 (exif_raw를 덮어쓰지 않도록 별도 변수 사용)
+        exposure_bias_ev = None
+        try:
+            from PIL import Image, ExifTags  # type: ignore
+            if Image is not None:
+                with Image.open(path) as im:
+                    ev_exif = im.getexif()
+                    name_map = getattr(ExifTags, 'TAGS', {})
+                    for tag_id, val in (ev_exif.items() if ev_exif else []):
+                        name = name_map.get(tag_id, str(tag_id))
+                        if name == 'ExposureBiasValue':
+                            fv = self._safe_frac_to_float(val)
+                            if fv is not None:
+                                exposure_bias_ev = fv
+                                break
+        except Exception:
+            exposure_bias_ev = None
+
+        # 주소/지도: GPS가 있을 때 역지오코딩 시도 및 미리보기 텍스트 갱신
+        address_text = None
+        try:
+            lat = exif_raw.get("lat") if isinstance(exif_raw, dict) else None
+            lon = exif_raw.get("lon") if isinstance(exif_raw, dict) else None
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                try:
+                    from ..services.geocoding import geocoding_service  # type: ignore
+                    addr = geocoding_service.get_address_from_coordinates(float(lat), float(lon))
+                    if addr and isinstance(addr, dict):
+                        address_text = str(addr.get("formatted") or addr.get("full_address") or "")
+                except Exception:
+                    address_text = None
+            # 지도 라벨(Static Map 이미지) 갱신
+            if getattr(self, "info_map_label", None) is not None:
+                if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                    try:
+                        from ..services.geocoding import get_google_static_map_png  # type: ignore
+                        img_bytes = get_google_static_map_png(float(lat), float(lon), width=720, height=440, zoom=12)
+                        if img_bytes:
+                            from PyQt6.QtGui import QPixmap  # type: ignore[import]
+                            from PyQt6.QtCore import QByteArray  # type: ignore[import]
+                            ba = QByteArray(img_bytes)
+                            pix = QPixmap()
+                            if pix.loadFromData(ba):
+                                self.info_map_label.setPixmap(pix)
+                                try:
+                                    self.info_map_label.setToolTip(f"https://www.google.com/maps?q={lat},{lon}")
+                                except Exception:
+                                    pass
+                            else:
+                                self.info_map_label.setText(f"지도: {lat:.6f}, {lon:.6f}")
+                        else:
+                            self.info_map_label.setText(f"지도: {lat:.6f}, {lon:.6f}")
+                    except Exception:
+                        self.info_map_label.setText(f"지도: {lat:.6f}, {lon:.6f}")
+                else:
+                    self.info_map_label.setText("지도 미리보기")
+        except Exception:
+            try:
+                if getattr(self, "info_map_label", None) is not None:
+                    self.info_map_label.setText("지도 미리보기")
+            except Exception:
+                pass
+
+        # summary_text가 있으면 그대로 사용, 없으면 최소 정보 구성
+        if not summary_text:
+            lines = []
+            dt = "-"
+            lines.append(f"촬영 날짜 및 시간: {dt}")
+            lines.append(f"파일명: {file_name}")
+            lines.append(f"디렉토리명: {dir_name}")
+            lines.append("촬영 기기: -")
+            lines.append(f"용량: {self._format_bytes(size_bytes)}")
+            res = f"{w} x {h}" if w > 0 and h > 0 else "-"
+            lines.append(f"해상도: {res}")
+            lines.append(f"화소수: {mp_text}")
+            lines.append("ISO: -")
+            lines.append("초점 거리: -")
+            lines.append("노출도: -")
+            lines.append("조리개값: -")
+            lines.append("셔터속도: -")
+            lines.append("GPS 위도, 경도: -")
+            summary_text = "\n".join(lines)
+        # 주소 텍스트는 GPS 라인 바로 아래에 삽입
+        try:
+            if address_text:
+                lines = (summary_text or "").splitlines()
+                inserted = False
+                for i, line in enumerate(lines):
+                    if line.strip().startswith("GPS 위도, 경도:"):
+                        lines.insert(i + 1, f"주소: {address_text}")
+                        inserted = True
+                        break
+                if not inserted and summary_text:
+                    lines.append(f"주소: {address_text}")
+                if lines:
+                    summary_text = "\n".join(lines)
+        except Exception:
+            pass
+
+        try:
+            if getattr(self, "info_text", None) is not None:
+                self.info_text.setPlainText(summary_text)
+        except Exception:
+            pass
+
+    def _dump_exif_all(self, path: str) -> str:
+        # 전체 EXIF/GPS 태그를 정돈된 텍스트로 변환
+        try:
+            from PIL import Image, ExifTags  # type: ignore
+        except Exception:
+            return "Pillow가 설치되어 있지 않습니다."
+        if Image is None or not os.path.exists(path):
+            return ""
+        name_map = {}
+        try:
+            name_map = getattr(__import__('PIL.ExifTags', fromlist=['TAGS']), 'TAGS', {})  # type: ignore
+        except Exception:
+            name_map = {}
+        gps_name_map = {}
+        try:
+            gps_name_map = getattr(__import__('PIL.ExifTags', fromlist=['GPSTAGS']), 'GPSTAGS', {})  # type: ignore
+        except Exception:
+            gps_name_map = {}
+
+        def _val_to_str(v):
+            try:
+                if isinstance(v, bytes):
+                    try:
+                        return v.decode('utf-8', errors='ignore')
+                    except Exception:
+                        return repr(v)
+                if isinstance(v, (list, tuple)):
+                    return ", ".join(_val_to_str(x) for x in v)
+                return str(v)
+            except Exception:
+                return str(v)
+
+        lines: list[str] = []
+        try:
+            with Image.open(path) as im:
+                exif = im.getexif()
+                if not exif:
+                    try:
+                        raw = im.info.get("exif")
+                        if raw:
+                            exif = Image.Exif()
+                            exif.load(raw)
+                    except Exception:
+                        pass
+                if not exif:
+                    return "(EXIF 없음)"
+                # 먼저 일반 태그 덤프
+                for tag_id, value in exif.items():
+                    tag_name = name_map.get(tag_id, f"Tag 0x{int(tag_id):04X}")
+                    if tag_name == 'GPSInfo' and isinstance(value, dict):
+                        # GPS는 하위 키 펼침
+                        try:
+                            gps_items = []
+                            for k in value.keys():
+                                sub_name = gps_name_map.get(k, f"0x{int(k):04X}")
+                                gps_items.append((str(sub_name), _val_to_str(value[k])))
+                            gps_items.sort(key=lambda x: x[0])
+                            lines.append('[GPSInfo]')
+                            for n, v in gps_items:
+                                lines.append(f"GPS.{n}: {v}")
+                        except Exception:
+                            lines.append("[GPSInfo] <파싱 실패>")
+                    else:
+                        try:
+                            lines.append(f"{tag_name}: {_val_to_str(value)}")
+                        except Exception:
+                            lines.append(f"{tag_name}: <표시 실패>")
+        except Exception:
+            return "(EXIF 읽기 실패)"
+        return "\n".join(lines)
+
+    # EXIF 탭 제거됨
 
     def scan_directory(self, dir_path):
         try:

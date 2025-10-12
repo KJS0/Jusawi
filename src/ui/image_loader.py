@@ -81,6 +81,13 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
     viewer._tf_flip_v = False
     viewer._apply_transform_to_view()
     viewer._mark_dirty(False)
+    # 정보 패널 갱신(보일 때만)
+    try:
+        if hasattr(viewer, "update_info_panel") and getattr(viewer, "info_text", None) is not None:
+            if viewer.info_text.isVisible():
+                viewer.update_info_panel()
+    except Exception:
+        pass
     try:
         viewer._history_undo.clear()
         viewer._history_redo.clear()

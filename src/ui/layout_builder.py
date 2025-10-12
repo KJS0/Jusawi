@@ -19,6 +19,13 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.recent_button = QPushButton("최근 파일")
     viewer.recent_button.setMenu(viewer.recent_menu)
 
+    # 정보 패널 토글 버튼
+    viewer.info_button = QPushButton("정보")
+    try:
+        viewer.info_button.clicked.connect(viewer.toggle_info_panel)
+    except Exception:
+        pass
+
     # 로그 버튼 제거
 
     # EXIF 정보 버튼 제거됨
@@ -66,6 +73,7 @@ def build_top_and_status_bars(viewer) -> None:
     for btn in [
         viewer.open_button,
         viewer.recent_button,
+        viewer.info_button,
         viewer.settings_button,
         viewer.fullscreen_button,
         viewer.prev_button,
@@ -79,6 +87,8 @@ def build_top_and_status_bars(viewer) -> None:
 
     viewer.button_layout.addWidget(viewer.open_button)
     viewer.button_layout.addWidget(viewer.recent_button)
+    # 정보 버튼
+    viewer.button_layout.addWidget(viewer.info_button)
     # EXIF 버튼 제거됨
     viewer.button_layout.addWidget(viewer.ai_button)
     viewer.button_layout.addWidget(viewer.search_button)

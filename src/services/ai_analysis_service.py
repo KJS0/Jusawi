@@ -71,31 +71,88 @@ def _extract_exif_summary(image_path: str) -> Dict[str, Any]:
             gps_map: Dict[str, Any] = {}
             try:
                 exif = im.getexif()
+                if not exif:
+                    # 폴백: info['exif'] 바이트에서 로드 시도
+                    try:
+                        raw = im.info.get("exif")
+                        if raw:
+                            exif = Image.Exif()
+                            exif.load(raw)
+                    except Exception:
+                        pass
+                exif_map_ids: Dict[int, Any] = {}
                 if exif:
                     for tag_id, value in exif.items():
+                        try:
+                            exif_map_ids[int(tag_id)] = value
+                        except Exception:
+                            pass
                         name = getattr(ExifTags, 'TAGS', {}).get(tag_id, str(tag_id))
                         if name == 'GPSInfo' and isinstance(value, dict):
+                            # GPS: 이름/ID 모두 보관
                             try:
                                 from PIL.ExifTags import GPSTAGS  # type: ignore
                                 gps_map = {GPSTAGS.get(k, str(k)): value[k] for k in value.keys()}
                             except Exception:
                                 gps_map = {str(k): value[k] for k in value.keys()}
+                            # ID 맵도 함께 준비
+                            try:
+                                gps_map_ids = {int(k): value[k] for k in value.keys()}
+                            except Exception:
+                                gps_map_ids = {}
                             continue
                         exif_map[name] = value
             except Exception:
                 pass
             # 우리가 필요로 하는 핵심 키만 매핑
-            def _frac_to_str(v: Any) -> str | None:
+            def _to_num(v: Any) -> float | None:
+                """다양한 유리수 표현(Fraction, IFDRational, (num,den), 'a/b', 숫자)을 float으로."""
                 try:
-                    s = str(v)
+                    # Fraction 또는 IFDRational
+                    if hasattr(v, "numerator") and hasattr(v, "denominator"):
+                        num = float(getattr(v, "numerator"))
+                        den = float(getattr(v, "denominator"))
+                        if den == 0:
+                            return None
+                        return num / den
+                    # (num, den) 튜플
+                    if isinstance(v, (tuple, list)) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
+                        if float(v[1]) == 0:
+                            return None
+                        return float(v[0]) / float(v[1])
+                    # 'a/b' 문자열
+                    s = str(v).strip()
                     if "/" in s:
                         a, b = s.split("/", 1)
                         fa, fb = float(a), float(b)
-                        if fb != 0:
-                            if fa > fb:
-                                return f"{fa/fb:.4f}"
-                            return f"{int(fa)}/{int(fb)}"
-                    return s
+                        if fb == 0:
+                            return None
+                        return fa / fb
+                    return float(s)
+                except Exception:
+                    return None
+
+            def _format_shutter(seconds: float) -> str:
+                # 1초 미만은 1/Ns, 이상은 Ns로 표기
+                try:
+                    if seconds <= 0:
+                        return "-"
+                    if seconds < 1.0:
+                        denom = max(1, int(round(1.0 / seconds)))
+                        return f"1/{denom}s"
+                    # 정수 초는 소수 제거
+                    if abs(seconds - round(seconds)) < 1e-3:
+                        return f"{int(round(seconds))}s"
+                    return f"{seconds:.2f}s"
+                except Exception:
+                    return "-"
+
+            def _apex_to_shutter(tv_apex: float | None) -> float | None:
+                # ShutterSpeedValue(APEX) -> seconds; Tv = log2(1/t)
+                try:
+                    if tv_apex is None:
+                        return None
+                    return 2.0 ** (-float(tv_apex))
                 except Exception:
                     return None
 
@@ -108,77 +165,168 @@ def _extract_exif_summary(image_path: str) -> Dict[str, Any]:
                 "iso": None,
                 "focal_length_mm": None,
                 "focal_length_35mm_eq_mm": None,
-                "datetime_original": str(exif_map.get("DateTimeOriginal", exif_map.get("DateTime", ""))) or None,
+                # DateTimeOriginal(36867) 우선, 폴백: DateTime
+                "datetime_original": None,
                 "gps": {"lat": None, "lon": None},
             }
-            # Aperture (FNumber)
             try:
-                fnum = exif_map.get("FNumber")
-                if fnum is not None:
-                    fs = _frac_to_str(fnum)
-                    if fs is not None:
-                        out["aperture"] = f"f/{float(fs):.1f}" if "/" not in fs else f"f/{float(fs.split('/') [0]) / float(fs.split('/') [1]):.1f}"
+                dto = None
+                # 36867: DateTimeOriginal
+                if locals().get('exif_map_ids'):
+                    dto = exif_map_ids.get(36867)
+                if not dto:
+                    dto = exif_map.get("DateTimeOriginal", exif_map.get("DateTime", ""))
+                out["datetime_original"] = str(dto) or None
             except Exception:
                 pass
-            # ExposureTime
+            # Aperture (FNumber 우선, 없으면 ApertureValue(APEX) 변환)
             try:
-                et = exif_map.get("ExposureTime")
-                if et is not None:
-                    ets = _frac_to_str(et)
-                    if ets:
-                        out["shutter"] = ets + ("s" if not ets.endswith("s") and "/" not in ets else "")
+                # FNumber(33437)
+                fnum = None
+                if locals().get('exif_map_ids'):
+                    fnum = exif_map_ids.get(33437)
+                if fnum is None:
+                    fnum = exif_map.get("FNumber")
+                if fnum is not None:
+                    fv = _to_num(fnum)
+                    if fv is not None and fv > 0:
+                        out["aperture"] = f"f/{fv:.1f}"
+                if out.get("aperture") is None:
+                    # ApertureValue(APEX)
+                    av = exif_map.get("ApertureValue")
+                    avf = _to_num(av)
+                    if avf is not None:
+                        # Av = log2(N^2) => N = 2^(Av/2)
+                        try:
+                            import math
+                            n = 2.0 ** (float(avf) / 2.0)
+                            if n > 0:
+                                out["aperture"] = f"f/{n:.1f}"
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            # Shutter (ExposureTime 우선, 없으면 ShutterSpeedValue(APEX))
+            try:
+                shutter_set = False
+                # ExposureTime(33434)
+                et = None
+                if locals().get('exif_map_ids'):
+                    et = exif_map_ids.get(33434)
+                if et is None:
+                    et = exif_map.get("ExposureTime")
+                etf = _to_num(et)
+                if etf is not None and etf > 0:
+                    out["shutter"] = _format_shutter(etf)
+                    shutter_set = True
+                if not shutter_set:
+                    sv = exif_map.get("ShutterSpeedValue")
+                    svf = _to_num(sv)
+                    secs = _apex_to_shutter(svf)
+                    if secs is not None and secs > 0:
+                        out["shutter"] = _format_shutter(secs)
             except Exception:
                 pass
             # ISO
             try:
-                iso = exif_map.get("ISOSpeedRatings", exif_map.get("PhotographicSensitivity"))
+                # ISOSpeedRatings/PhotographicSensitivity: 34855 우선
+                iso = None
+                if locals().get('exif_map_ids'):
+                    iso = exif_map_ids.get(34855)
+                if iso is None:
+                    iso = (
+                        exif_map.get("PhotographicSensitivity",
+                            exif_map.get("ISOSpeedRatings",
+                                exif_map.get("ISOSpeed")
+                            )
+                        )
+                    )
                 if iso is not None:
-                    out["iso"] = int(str(iso).split()[0])
+                    # 배열/리스트일 수 있음 -> 첫 값
+                    if isinstance(iso, (list, tuple)) and iso:
+                        iso_val = iso[0]
+                    else:
+                        iso_val = iso
+                    iso_num = _to_num(iso_val)
+                    if iso_num is None:
+                        try:
+                            iso_num = float(str(iso_val).split()[0])
+                        except Exception:
+                            iso_num = None
+                    if iso_num is not None and iso_num > 0:
+                        out["iso"] = int(round(iso_num))
             except Exception:
                 pass
             # Focal lengths
             try:
-                fl = exif_map.get("FocalLength")
+                # FocalLength(37386)
+                fl = None
+                if locals().get('exif_map_ids'):
+                    fl = exif_map_ids.get(37386)
+                if fl is None:
+                    fl = exif_map.get("FocalLength")
                 if fl is not None:
-                    s = _frac_to_str(fl)
-                    if s:
-                        if "/" in s:
-                            num, den = s.split("/", 1)
-                            out["focal_length_mm"] = int(round(float(num) / float(den)))
-                        elif s.replace('.', '', 1).isdigit():
-                            out["focal_length_mm"] = int(round(float(s)))
+                    fv = _to_num(fl)
+                    if fv is not None and fv > 0:
+                        out["focal_length_mm"] = int(round(fv))
             except Exception:
                 pass
             try:
-                fleq = exif_map.get("FocalLengthIn35mmFilm")
+                # FocalLengthIn35mmFilm(41989) 우선
+                fleq = None
+                if locals().get('exif_map_ids'):
+                    fleq = exif_map_ids.get(41989)
+                if fleq is None:
+                    fleq = exif_map.get("FocalLengthIn35mmFilm", exif_map.get("FocalLengthIn35mmFormat"))
                 if fleq is not None:
-                    out["focal_length_35mm_eq_mm"] = int(str(fleq).split()[0])
+                    fv = _to_num(fleq)
+                    if fv is None:
+                        try:
+                            fv = float(str(fleq).split()[0])
+                        except Exception:
+                            fv = None
+                    if fv is not None and fv > 0:
+                        out["focal_length_35mm_eq_mm"] = int(round(fv))
             except Exception:
                 pass
             # GPS
             try:
-                def _to_deg(x):
-                    try:
-                        num, den = float(x[0]), float(x[1])
-                        return num / den if den != 0 else 0.0
-                    except Exception:
-                        return float(x)
+                def _to_deg_component(val):
+                    n = _to_num(val)
+                    return 0.0 if n is None else float(n)
                 def _dms_to_deg(dms):
-                    d = _to_deg(dms[0]) if len(dms) > 0 else 0.0
-                    m = _to_deg(dms[1]) if len(dms) > 1 else 0.0
-                    s = _to_deg(dms[2]) if len(dms) > 2 else 0.0
+                    d = _to_deg_component(dms[0]) if len(dms) > 0 else 0.0
+                    m = _to_deg_component(dms[1]) if len(dms) > 1 else 0.0
+                    s = _to_deg_component(dms[2]) if len(dms) > 2 else 0.0
                     return d + (m / 60.0) + (s / 3600.0)
-                if gps_map:
+                # GPSInfo(34853) 서브IFD에서 좌표 추출: 이름/ID 모두 지원
+                lat = lon = None
+                ref_lat = ref_lon = None
+                try:
+                    if locals().get('gps_map_ids') and isinstance(gps_map_ids, dict) and gps_map_ids:
+                        # 1: LatRef, 2: Lat, 3: LonRef, 4: Lon
+                        glat = gps_map_ids.get(2)
+                        glon = gps_map_ids.get(4)
+                        ref_lat = str(gps_map_ids.get(1) or "").upper()
+                        ref_lon = str(gps_map_ids.get(3) or "").upper()
+                        if isinstance(glat, (list, tuple)) and len(glat) >= 3:
+                            lat = _dms_to_deg(glat)
+                        if isinstance(glon, (list, tuple)) and len(glon) >= 3:
+                            lon = _dms_to_deg(glon)
+                    if (lat is None or lon is None) and gps_map:
+                        if 'GPSLatitude' in gps_map and 'GPSLatitudeRef' in gps_map:
+                            lat = _dms_to_deg(gps_map['GPSLatitude'])
+                            ref_lat = str(gps_map.get('GPSLatitudeRef') or "").upper()
+                        if 'GPSLongitude' in gps_map and 'GPSLongitudeRef' in gps_map:
+                            lon = _dms_to_deg(gps_map['GPSLongitude'])
+                            ref_lon = str(gps_map.get('GPSLongitudeRef') or "").upper()
+                    if lat is not None and ref_lat and ref_lat.startswith('S'):
+                        lat = -abs(lat)
+                    if lon is not None and ref_lon and ref_lon.startswith('W'):
+                        lon = -abs(lon)
+                except Exception:
                     lat = lon = None
-                    if 'GPSLatitude' in gps_map and 'GPSLatitudeRef' in gps_map:
-                        lat = _dms_to_deg(gps_map['GPSLatitude'])
-                        if str(gps_map['GPSLatitudeRef']).upper().startswith('S'):
-                            lat = -lat
-                    if 'GPSLongitude' in gps_map and 'GPSLongitudeRef' in gps_map:
-                        lon = _dms_to_deg(gps_map['GPSLongitude'])
-                        if str(gps_map['GPSLongitudeRef']).upper().startswith('W'):
-                            lon = -lon
-                    out["gps"] = {"lat": lat, "lon": lon}
+                out["gps"] = {"lat": lat, "lon": lon}
             except Exception:
                 pass
             return out
