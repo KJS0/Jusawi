@@ -54,32 +54,7 @@ def open_shortcuts_help(viewer: "JusawiViewer") -> None:
     viewer._set_global_shortcuts_enabled(True)
 
 
-# NEW: EXIF dialog opener
-
-def open_exif_dialog(viewer: "JusawiViewer") -> None:
-    if not getattr(viewer, "current_image_path", None):
-        try:
-            from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
-            QMessageBox.information(viewer, "사진 정보", "먼저 사진을 열어주세요.")
-        except Exception:
-            pass
-        return
-    try:
-        viewer._set_global_shortcuts_enabled(False)
-    except Exception:
-        pass
-    try:
-        from .exif_dialog import ExifDialog
-        d = ExifDialog(viewer, image_path=viewer.current_image_path)
-        d.resize(720, 520)
-        d.exec()
-    except Exception:
-        pass
-    finally:
-        try:
-            viewer._set_global_shortcuts_enabled(True)
-        except Exception:
-            pass
+# EXIF 열람 기능 제거됨
 
 
 def open_ai_analysis_dialog(viewer: "JusawiViewer") -> None:
@@ -109,11 +84,41 @@ def open_ai_analysis_dialog(viewer: "JusawiViewer") -> None:
 
 
 def open_natural_search_dialog(viewer: "JusawiViewer") -> None:
-    # 비활성화: 자연어 검색 기능 제거
-    try:
+    files = getattr(viewer, "image_files_in_dir", []) or []
+    if not files:
+        try:
+            import os  # lazy import inside function
+            cur = getattr(viewer, "current_image_path", "") or ""
+            if cur and os.path.exists(cur):
+                dir_path = os.path.dirname(cur)
+                if dir_path and os.path.isdir(dir_path):
+                    viewer.scan_directory(dir_path)
+                    files = getattr(viewer, "image_files_in_dir", []) or []
+        except Exception:
+            files = []
+    if not files:
         from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
-        QMessageBox.information(viewer, "자연어 검색", "자연어 검색 기능이 비활성화되었습니다.")
+        QMessageBox.information(viewer, "자연어 검색", "현재 파일의 폴더를 확인할 수 없습니다.")
+        return
+    try:
+        viewer._set_global_shortcuts_enabled(False)
     except Exception:
         pass
+    try:
+        from .natural_search_dialog import NaturalSearchDialog
+        d = NaturalSearchDialog(viewer, files=files)
+        d.resize(800, 600)
+        d.exec()
+    except Exception as e:
+        try:
+            from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+            QMessageBox.warning(viewer, "자연어 검색", f"다이얼로그 열기 실패: {e}")
+        except Exception:
+            pass
+    finally:
+        try:
+            viewer._set_global_shortcuts_enabled(True)
+        except Exception:
+            pass
 
 

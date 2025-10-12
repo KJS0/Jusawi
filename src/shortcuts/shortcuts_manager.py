@@ -53,6 +53,8 @@ COMMANDS: List[Command] = [
 
     # 도움말(F1)은 고정
     Command("help_shortcuts", "단축키 도움말", "현재 단축키 표시", "도움말", "open_shortcuts_help", ["F1"], lock_key=True),
+    # Natural language search
+    Command("open_natural_search", "자연어 검색", "텍스트로 이미지 검색", "검색", "open_natural_search_dialog", ["Ctrl+K"]),
 ]
 
 

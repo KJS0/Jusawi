@@ -21,17 +21,15 @@ def build_top_and_status_bars(viewer) -> None:
 
     # 로그 버튼 제거
 
-    # NEW: Info (EXIF) button
-    viewer.info_button = QPushButton("정보")
-    viewer.info_button.clicked.connect(viewer.open_exif_dialog)
+    # EXIF 정보 버튼 제거됨
 
     # NEW: AI Analysis button
     viewer.ai_button = QPushButton("AI 분석")
     viewer.ai_button.clicked.connect(viewer.open_ai_analysis_dialog)
 
-    # NEW: Natural language search button (비활성화)
-    # viewer.search_button = QPushButton("검색")
-    # viewer.search_button.clicked.connect(viewer.open_natural_search_dialog)
+    # NEW: Natural language search button
+    viewer.search_button = QPushButton("검색")
+    viewer.search_button.clicked.connect(viewer.open_natural_search_dialog)
 
     viewer.settings_button = QPushButton("설정")
     viewer.settings_button.clicked.connect(viewer.open_settings_dialog)
@@ -68,7 +66,6 @@ def build_top_and_status_bars(viewer) -> None:
     for btn in [
         viewer.open_button,
         viewer.recent_button,
-        viewer.info_button,
         viewer.settings_button,
         viewer.fullscreen_button,
         viewer.prev_button,
@@ -82,9 +79,9 @@ def build_top_and_status_bars(viewer) -> None:
 
     viewer.button_layout.addWidget(viewer.open_button)
     viewer.button_layout.addWidget(viewer.recent_button)
-    viewer.button_layout.addWidget(viewer.info_button)
+    # EXIF 버튼 제거됨
     viewer.button_layout.addWidget(viewer.ai_button)
-    # 자연어 검색 버튼 제거
+    viewer.button_layout.addWidget(viewer.search_button)
     viewer.button_layout.addWidget(viewer.fullscreen_button)
     viewer.button_layout.addWidget(viewer.prev_button)
     viewer.button_layout.addWidget(viewer.next_button)

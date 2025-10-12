@@ -65,13 +65,28 @@ class VerifierService:
             from .ai_analysis_service import _preprocess_image_for_model  # reuse
         except Exception:
             return None
-        # 검증은 더 공격적인 축소/품질로도 충분
+        try:
+            max_side = int(os.getenv("AI_VERIFY_MAX_SIDE", "768") or 768)
+        except Exception:
+            max_side = 768
+        try:
+            jpeg_quality = int(os.getenv("AI_VERIFY_JPEG_QUALITY", "70") or 70)
+        except Exception:
+            jpeg_quality = 70
+        try:
+            target_bytes = int(os.getenv("AI_VERIFY_TARGET_BYTES", "300000") or 300000)
+        except Exception:
+            target_bytes = 300000
+        try:
+            min_side = int(os.getenv("AI_VERIFY_MIN_SIDE", "320") or 320)
+        except Exception:
+            min_side = 320
         return _preprocess_image_for_model(
             image_path,
-            max_side=512,
-            jpeg_quality=60,
-            target_bytes=200000,
-            min_side=256,
+            max_side=max_side,
+            jpeg_quality=jpeg_quality,
+            target_bytes=target_bytes,
+            min_side=min_side,
         )
 
     def verify(self, image_path: str, query_text: str) -> Dict[str, Any]:
@@ -93,22 +108,37 @@ class VerifierService:
                     pass
             return out
 
-        # 프롬프트: 간결/정확/JSON 강제
+        # 프롬프트 강화: 색상/객관 요소 중시, 허위 추론 금지, JSON 강제
         system_msg = (
-            "당신은 사진 검증 어시스턴트다. 사용자가 제시한 장면 설명과 이미지가 일치하는지 평가한다.\n"
-            "- 반드시 JSON으로만 답하라. 여분 텍스트 금지.\n"
+            "당신은 사진 검증 어시스턴트다. 사용자 질의와 이미지의 일치 여부를 판단한다.\n"
+            "- 반드시 JSON으로만 답한다(여분 텍스트 금지).\n"
+            "- 보이는 정보에만 근거한다. 추측/환각 금지.\n"
+            "- 질의에 특정 색상/수량/객체가 명시되면 해당 요소 부재 시 match=false로 판정한다.\n"
         )
         instruction = (
-            "다음 스키마로만 출력:\n"
+            "스키마:\n"
             '{"match": true|false, "confidence": 0.0~1.0, "reasons": "간단 근거"}\n'
+            "판정 기준:\n"
+            "- 장면/주요 객체/행동/관계/색상을 종합 판단.\n"
+            "- 색상 언급이 있는 경우, 해당 색이 핵심 대상에 실제로 보이는지 확인.\n"
+            "- 불명확하면 match=false에 가깝게 낮은 confidence로.\n"
         )
 
         import base64
         from openai import OpenAI  # type: ignore
         try:
-            timeout_s = float(os.getenv("AI_VERIFY_TIMEOUT", "6") or 6)
+            timeout_s = float(os.getenv("AI_VERIFY_TIMEOUT", "10") or 10)
         except Exception:
-            timeout_s = 6.0
+            timeout_s = 10.0
+        try:
+            top_p = float(os.getenv("AI_VERIFY_TOP_P", "1") or 1)
+        except Exception:
+            top_p = 1.0
+        try:
+            n = int(os.getenv("AI_VERIFY_N", "1") or 1)
+        except Exception:
+            n = 1
+        n = max(1, min(8, n))
         client = OpenAI(api_key=self._api_key, timeout=timeout_s)
         b64 = base64.b64encode(img).decode("ascii")
         messages = [
@@ -123,23 +153,47 @@ class VerifierService:
         ]
         try:
             t2 = time.monotonic()
-            resp = client.chat.completions.create(model=self._model, messages=messages)
+            resp = client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                top_p=top_p,
+                n=n,
+            )
             t3 = time.monotonic()
-            txt = resp.choices[0].message.content or "{}"
-            data = json.loads(txt)
-            # 최소 필드 보정
-            out = {
-                "match": bool(data.get("match", False)),
-                "confidence": float(data.get("confidence", 0.0)),
-                "reasons": str(data.get("reasons", "")),
-            }
-            self._save_cache(key, out)
+            best_conf = 0.0
+            best = {"match": False, "confidence": 0.0, "reasons": ""}
+            # 집계 방식: max(기본). mean을 원하면 AI_VERIFY_AGG=mean
+            agg = (os.getenv("AI_VERIFY_AGG", "max") or "max").lower()
+            confs: List[float] = []
+            outs: List[Dict[str, Any]] = []
+            for ch in resp.choices:
+                txt = (getattr(getattr(ch, "message", None), "content", None) or "{}")
+                try:
+                    data = json.loads(txt)
+                    out = {
+                        "match": bool(data.get("match", False)),
+                        "confidence": float(data.get("confidence", 0.0)),
+                        "reasons": str(data.get("reasons", "")),
+                    }
+                except Exception:
+                    out = {"match": False, "confidence": 0.0, "reasons": "parse_fail"}
+                outs.append(out)
+                confs.append(float(out.get("confidence", 0.0)))
+                if float(out.get("confidence", 0.0)) > best_conf:
+                    best_conf = float(out.get("confidence", 0.0))
+                    best = out
+            if agg == "mean" and confs:
+                mean_conf = sum(confs) / float(len(confs))
+                # mean에서는 match를 best 기준으로 유지, confidence만 평균
+                best = dict(best)
+                best["confidence"] = float(mean_conf)
+            self._save_cache(key, best)
             if os.getenv("AI_VERIFY_LOG", "0") == "1":
                 try:
-                    _log.info("verify_ok | file=%s | conf=%.3f | dt_pre=%.3fs | dt_api=%.3fs", os.path.basename(image_path), float(out.get("confidence",0.0)), (t1-t0), (t3-t2))
+                    _log.info("verify_ok | file=%s | conf=%.3f | n=%d | dt_pre=%.3fs | dt_api=%.3fs", os.path.basename(image_path), float(best.get("confidence",0.0)), int(n), (t1-t0), (t3-t2))
                 except Exception:
                     pass
-            return out
+            return best
         except Exception as e:
             try:
                 _log.warning("verify_fail | err=%s", str(e))

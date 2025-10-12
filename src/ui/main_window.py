@@ -595,8 +595,7 @@ class JusawiViewer(QMainWindow):
     def open_shortcuts_help(self):
         dlg.open_shortcuts_help(self)
 
-    def open_exif_dialog(self):
-        dlg.open_exif_dialog(self)
+    # EXIF 열람 기능 제거됨
 
     def open_ai_analysis_dialog(self):
         dlg.open_ai_analysis_dialog(self)
