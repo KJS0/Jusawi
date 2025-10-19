@@ -111,22 +111,20 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.button_layout.addWidget(viewer.settings_button)
 
     viewer.button_bar = QWidget()
-    viewer.button_bar.setStyleSheet("background-color: transparent; QPushButton { color: #EAEAEA; }")
+    # 테마 스타일은 theme.apply_ui_theme_and_spacing에서 일괄 적용
+    viewer.button_bar.setStyleSheet("")
     viewer.button_bar.setLayout(viewer.button_layout)
     viewer.main_layout.insertWidget(0, viewer.button_bar)
 
     # Status bar
     viewer.status_left_label = QLabel("", viewer)
     viewer.status_right_label = QLabel("", viewer)
-    viewer.status_left_label.setStyleSheet("color: #EAEAEA;")
-    viewer.status_right_label.setStyleSheet("color: #EAEAEA;")
+    viewer.status_left_label.setStyleSheet("")
+    viewer.status_right_label.setStyleSheet("")
     viewer.statusBar().addWidget(viewer.status_left_label, 1)
     viewer.statusBar().addPermanentWidget(viewer.status_right_label)
-    viewer.statusBar().setStyleSheet(
-        "QStatusBar { background-color: #373737; border-top: 1px solid #373737; color: #EAEAEA; } "
-        "QStatusBar QLabel { color: #EAEAEA; } "
-        "QStatusBar::item { border: 0px; }"
-    )
+    # 상태바 스타일은 theme.apply_ui_theme_and_spacing에서 설정
+    viewer.statusBar().setStyleSheet("")
 
     # Progress and cancel button on status bar
     try:

@@ -315,6 +315,13 @@ class FilmstripDelegate(QStyledItemDelegate):
         else:
             # 픽스맵이 아직 없을 때(로딩 전)도 테마 배경이 보이도록 칠해 둠
             painter.fillRect(r.adjusted(6, 6, -6, -6), bg_col)
+        # 썸네일 사이 경계선(미세 구분선)
+        try:
+            sep_col = QColor("#3A3A3A")
+            painter.setPen(QPen(sep_col, 1))
+            painter.drawLine(r.topRight(), r.bottomRight())
+        except Exception:
+            pass
         if option.state & QStyle.StateFlag.State_Selected:
             pen = QPen(sel_col, 3)
             painter.setPen(pen)
@@ -322,6 +329,7 @@ class FilmstripDelegate(QStyledItemDelegate):
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        # 셀 크기는 현재 썸네일 단계 + 여백(좌우 12px, 상하 14px)
         size = int(self._get_size())
         return QSize(size + 24, size + 28)
 
@@ -331,7 +339,8 @@ class FilmstripView(QListView):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._size_idx = len(THUMB_STEPS) - 1  # 기본 280px
+        # 기본: 최대 썸네일 단계 사용 (가장 크게 보이도록)
+        self._size_idx = len(THUMB_STEPS) - 1
         self._cache = ThumbCache(quality=85)
         self._pool = QThreadPool.globalInstance()
         self._model = FilmstripModel(self._cache, self._pool, self._target_size, self._current_dpr)
@@ -352,10 +361,7 @@ class FilmstripView(QListView):
         self.setHorizontalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         # 초기 테마 적용은 부모 뷰어의 _resolved_theme를 참조하여 동적으로 설정됨
         try:
-            viewer = self.parent().parent() if self.parent() else None
-            is_light = (getattr(viewer, "_resolved_theme", "dark") == "light")
-            bg = "#F7F7F7" if is_light else "#1F1F1F"
-            self.setStyleSheet(f"QListView, QListView::viewport {{ background-color: {bg}; }}")
+            self.setStyleSheet("QListView, QListView::viewport { background-color: #1F1F1F; }")
         except Exception:
             self.setStyleSheet("QListView, QListView::viewport { background-color: #1F1F1F; }")
 
@@ -395,12 +401,42 @@ class FilmstripView(QListView):
 
     def _update_fixed_height(self):
         h = self._target_size() + 28 + 4
-        self.setFixedHeight(h)
+        try:
+            # 자유 조절 허용: 최대 높이만 제한 (썸네일 최대 높이 초과 금지)
+            self.setMaximumHeight(h)
+            # 하한은 최소 UI 가독성 유지 수준으로 설정
+            self.setMinimumHeight(48)
+        except Exception:
+            self.setFixedHeight(h)
+
+    def adjust_thumbnail_step_for_height(self, container_height: int) -> None:
+        try:
+            avail = max(1, int(container_height) - (28 + 4))
+            best_idx = 0
+            for i in range(len(THUMB_STEPS)):
+                if THUMB_STEPS[i] + 2 <= avail:
+                    best_idx = i
+            if best_idx != self._size_idx:
+                self._size_idx = best_idx
+                self._update_fixed_height()
+                try:
+                    self.viewport().update()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def apply_theme(self, is_light: bool) -> None:
         try:
-            bg = "#F7F7F7" if bool(is_light) else "#1F1F1F"
-            self.setStyleSheet(f"QListView, QListView::viewport {{ background-color: {bg}; }}")
+            # 요청: 라이트 테마에서도 스크롤/배경은 다크 테마와 동일 계열 유지
+            bg = "#1F1F1F"
+            self.setStyleSheet(
+                f"QListView, QListView::viewport {{ background-color: {bg}; }}"
+                f" QScrollBar:horizontal {{ background: #2B2B2B; height: 12px; }}"
+                f" QScrollBar::handle:horizontal {{ background: #555; min-width: 24px; border-radius: 6px; }}"
+                f" QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ background: transparent; width: 0px; }}"
+                f" QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: #2B2B2B; }}"
+            )
             try:
                 from PyQt6.QtGui import QPalette, QColor  # type: ignore
                 pal = self.viewport().palette()
@@ -421,7 +457,7 @@ class FilmstripView(QListView):
                 self._suppress_signal = True
                 try:
                     self.setCurrentIndex(self._model.index(current_index, 0))
-                    self.scrollTo(self.currentIndex(), QListView.ScrollHint.PositionAtCenter)
+                    # 기본적으로 가운데 정렬로 스크롤하지 않음
                 finally:
                     self._suppress_signal = False
         except Exception:
@@ -437,7 +473,7 @@ class FilmstripView(QListView):
             self._suppress_signal = True
             try:
                 self.setCurrentIndex(self._model.index(row, 0))
-                self.scrollTo(self.currentIndex(), QListView.ScrollHint.PositionAtCenter)
+                # 기본적으로 가운데 정렬 스크롤을 하지 않음
             finally:
                 self._suppress_signal = False
 

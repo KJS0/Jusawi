@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+def style_rating_bar(viewer) -> None:
+    try:
+        from . import rating_bar as _rating_bar
+        _rating_bar.apply_theme(viewer, False)
+    except Exception:
+        pass
+
 
 def apply_ui_theme_and_spacing(viewer) -> None:
     try:
@@ -9,43 +16,15 @@ def apply_ui_theme_and_spacing(viewer) -> None:
         viewer.main_layout.setSpacing(spacing)
     except Exception:
         pass
-    theme = getattr(viewer, "_theme", 'dark')
-    resolved = theme
-    if theme == 'system':
-        try:
-            import sys as _sys
-            if _sys.platform == 'win32':
-                try:
-                    import winreg
-                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                        r"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize") as k:
-                        val, _ = winreg.QueryValueEx(k, "AppsUseLightTheme")
-                        resolved = 'light' if int(val) == 1 else 'dark'
-                except Exception:
-                    resolved = 'dark'
-            else:
-                from PyQt6.QtWidgets import QApplication  # type: ignore[import]
-                pal = QApplication.instance().palette() if QApplication.instance() else None
-                if pal:
-                    c = pal.window().color()
-                    luma = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
-                    resolved = 'light' if luma >= 127 else 'dark'
-                else:
-                    resolved = 'dark'
-        except Exception:
-            resolved = 'dark'
+    # Light 테마 제거: 항상 다크 테마로 강제
+    resolved = 'dark'
     try:
         viewer._resolved_theme = resolved
     except Exception:
         pass
-    if resolved == 'light':
-        bg = "#F0F0F0"
-        fg = "#222222"
-        bar_bg = "#E0E0E0"
-    else:
-        bg = "#373737"
-        fg = "#EAEAEA"
-        bar_bg = "#373737"
+    bg = "#373737"
+    fg = "#EAEAEA"
+    bar_bg = "#373737"
     try:
         viewer.centralWidget().setStyleSheet(f"background-color: {bg};")
     except Exception:
@@ -113,14 +92,86 @@ def apply_ui_theme_and_spacing(viewer) -> None:
         pass
     try:
         from PyQt6.QtGui import QColor, QBrush  # type: ignore[import]
-        if resolved == 'light':
-            viewer.image_display_area.setBackgroundBrush(QBrush(QColor("#F0F0F0")))
-        else:
-            viewer.image_display_area.setBackgroundBrush(QBrush(QColor("#373737")))
+        viewer.image_display_area.setBackgroundBrush(QBrush(QColor("#373737")))
     except Exception:
         pass
     try:
         viewer.button_bar.setStyleSheet(f"background-color: transparent; QPushButton {{ color: {fg}; }}")
+    except Exception:
+        pass
+
+    # Info panel theming (dark only) + 동적 폰트 크기
+    try:
+        if getattr(viewer, 'info_text', None) is not None:
+            try:
+                total_w = max(640, int(viewer.width()))
+                scaled = max(16, min(24, int(total_w / 80)))
+            except Exception:
+                scaled = 20
+            viewer.info_text.setStyleSheet(
+                f"QTextEdit {{ color: #EAEAEA; background-color: #2B2B2B; border: 1px solid #444; font-size: {scaled}px; line-height: 140%; }} QTextEdit:disabled {{ color: #777777; }}"
+            )
+    except Exception:
+        pass
+    try:
+        if getattr(viewer, 'info_map_label', None) is not None:
+            viewer.info_map_label.setStyleSheet("QLabel { background-color: #2B2B2B; color: #AAAAAA; border: 1px solid #444; }")
+    except Exception:
+        pass
+
+    # Filmstrip theming (dark only, including scrollbar)
+    try:
+        fs = getattr(viewer, 'filmstrip', None)
+        if fs is not None:
+            fs.setStyleSheet(
+                "QListView, QListView::viewport { background-color: #1F1F1F; }"
+                " QScrollBar:horizontal { background: #2B2B2B; height: 12px; }"
+                " QScrollBar::handle:horizontal { background: #555; min-width: 24px; border-radius: 6px; }"
+                " QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { background: transparent; width: 0px; }"
+                " QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: #2B2B2B; }"
+            )
+            try:
+                from PyQt6.QtGui import QPalette, QColor  # type: ignore
+                pal = fs.viewport().palette()
+                pal.setColor(QPalette.ColorRole.Base, QColor("#1F1F1F"))
+                pal.setColor(QPalette.ColorRole.Window, QColor("#1F1F1F"))
+                fs.viewport().setPalette(pal)
+                fs.viewport().setAutoFillBackground(True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Rating bar theming centralized (base)
+    try:
+        style_rating_bar(viewer)
+    except Exception:
+        pass
+
+    # Dialogs and common widgets theming (extend coverage)
+    try:
+        fg = fg  # already defined
+        bg = bg
+        # Apply to known dialogs if present
+        for name in [
+            'settings_dialog',
+            'shortcuts_help_dialog',
+            'ai_analysis_dialog',
+            'natural_search_dialog',
+            'similar_search_dialog',
+        ]:
+            dlg = getattr(viewer, name, None)
+            if dlg is None:
+                continue
+            try:
+                dlg.setStyleSheet(
+                    f"QDialog {{ background-color: {bg}; color: {fg}; }}"
+                    f" QLabel {{ color: {fg}; }}"
+                    f" QLineEdit, QComboBox, QTextEdit {{ background-color: #2B2B2B; color: {fg}; border: 1px solid #444; }}"
+                    f" QPushButton {{ color: {fg}; background-color: transparent; border: 1px solid {'#9E9E9E' if resolved=='light' else '#555'}; padding: 4px 8px; border-radius: 4px; }}"
+                )
+            except Exception:
+                pass
     except Exception:
         pass
 

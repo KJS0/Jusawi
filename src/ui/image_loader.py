@@ -83,6 +83,7 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                     already_listed = nc(path) in listed_set and nc(getattr(viewer, "_last_scanned_dir", "")) == nc(dirp)
             except Exception:
                 already_listed = False
+            # 동일 폴더이고 목록이 이미 최신이면 재스캔 생략(불필요한 대량 I/O 방지)
             if not already_listed:
                 viewer.scan_directory(dirp)
         except Exception:

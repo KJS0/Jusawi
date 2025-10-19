@@ -6,6 +6,7 @@ def save_last_session(viewer) -> None:
         last = {
             "file_path": viewer.current_image_path or "",
             "dir_path": os.path.dirname(viewer.current_image_path) if viewer.current_image_path else "",
+            "dir_index": int(getattr(viewer, "current_image_index", -1) or -1),
             "view_mode": getattr(viewer.image_display_area, "_view_mode", getattr(viewer, "_last_view_mode", 'fit')),
             "scale": float(getattr(viewer, "_last_scale", 1.0) or 1.0),
             "fullscreen": bool(viewer.is_fullscreen),
@@ -24,14 +25,22 @@ def restore_last_session(viewer) -> None:
             return
         fpath = last.get("file_path") or ""
         dpath = last.get("dir_path") or ""
+        dindex = int(last.get("dir_index") or -1)
         vmode = last.get("view_mode") or 'fit'
         scale = float(last.get("scale") or 1.0)
-        if fpath and os.path.isfile(fpath):
-            viewer.load_image(fpath, source='restore')
-        elif dpath and os.path.isdir(dpath):
+        # 디렉터리 컨텍스트가 있으면 이를 우선 복원하고 인덱스를 반영
+        if dpath and os.path.isdir(dpath):
             viewer.scan_directory(dpath)
+            try:
+                if 0 <= dindex < len(viewer.image_files_in_dir):
+                    viewer.current_image_index = dindex
+            except Exception:
+                pass
             if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
                 viewer.load_image(viewer.image_files_in_dir[viewer.current_image_index], source='restore')
+        elif fpath and os.path.isfile(fpath):
+            # 폴더 정보가 없을 때만 단일 파일 복원
+            viewer.load_image(fpath, source='restore')
         else:
             # 보조 복원: 최근 파일 목록에서 첫 항목 시도
             try:
@@ -56,10 +65,12 @@ def restore_last_session(viewer) -> None:
             viewer.image_display_area.reset_to_100()
         if remember and vmode == 'free' and viewer.image_display_area:
             viewer.image_display_area.set_absolute_scale(scale)
+        # 창 위치/크기 복원은 기본 비활성화 (_restore_window_geometry 가 True일 때만)
         try:
-            geom = last.get("window_geometry")
-            if geom:
-                viewer.restoreGeometry(geom)
+            if bool(getattr(viewer, "_restore_window_geometry", False)):
+                geom = last.get("window_geometry")
+                if geom:
+                    viewer.restoreGeometry(geom)
         except Exception:
             pass
     except Exception:

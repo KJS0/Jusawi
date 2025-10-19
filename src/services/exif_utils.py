@@ -224,45 +224,58 @@ def extract_with_pillow(path: str) -> Dict[str, Any]:
 
 def format_summary_text(meta: Dict[str, Any], path: str) -> str:
     try:
-        # 디렉토리 경로 전체(최상위부터)를 역슬래시로 표시
+        # 파일 경로/이름
         full_dir = os.path.dirname(path)
         filename = os.path.basename(path)
         try:
             file_bytes = os.path.getsize(path)
         except Exception:
             file_bytes = 0
-        parts = []
-        parts.append(f"{meta.get('datetime') or '-'}")
+
         make = str(meta.get('make') or '').strip()
         model = str(meta.get('model') or '').strip()
-        cam = " ".join([x for x in [make, model] if x]) or "-"
-        parts.append(f"{full_dir}/{filename}")
-        parts.append(f"{_human_bytes(file_bytes)}")
+        cam = " ".join([x for x in [make, model] if x]).strip() or "-"
+
         w, h = meta.get('width') or 0, meta.get('height') or 0
-        parts.append(f"{w} x {h}" if w and h else "-")
+        res_text = f"{w} x {h}" if (w and h) else "-"
         mp = meta.get('megapixels')
-        parts.append(f"{mp}MP" if mp else "-")
-        iso = meta.get('iso')
-        parts.append(f"{cam}")
+        mp_text = f"{mp}MP" if mp else "-"
+
+        # 초점거리 표시(환산 포함)
+        focal_text = "-"
         fl = meta.get('focal_mm')
         fl35 = meta.get('focal_35mm')
-        if fl and fl35:
-            parts.append(f"{int(round(fl))}mm (환산 {int(round(float(fl35)))}mm)")
-        elif fl35:
-            parts.append(f"환산 {int(round(float(fl35)))}mm")
-        elif fl:
-            parts.append(f"{int(round(fl))}mm")
-        else:
-            parts.append("-")
+        try:
+            if fl and fl35:
+                focal_text = f"{int(round(fl))}mm (환산 {int(round(float(fl35)))}mm)"
+            elif fl35:
+                focal_text = f"환산 {int(round(float(fl35)))}mm"
+            elif fl:
+                focal_text = f"{int(round(fl))}mm"
+        except Exception:
+            focal_text = "-"
+
         fn = _format_fnumber(meta.get('fnumber')) or "-"
         sh = _format_shutter(meta.get('exposure_time')) or "-"
-        iso = meta.get('iso') or "-"
-        parts.append(f"{sh} | {fn} | {iso}")
+        iso = str(meta.get('iso')) if meta.get('iso') not in (None, "", 0) else "-"
+
         lat, lon = meta.get('lat'), meta.get('lon')
-        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-            parts.append(f"{lat:.6f}, {lon:.6f}")
-        else:
-            parts.append("")
+        gps_text = f"{lat:.6f}, {lon:.6f}" if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) else "-"
+
+        parts: list[str] = []
+        parts.append(f"촬영 날짜 및 시간: {meta.get('datetime') or '-'}")
+        parts.append(f"파일명: {filename}")
+        parts.append(f"디렉토리명: {full_dir}")
+        parts.append(f"촬영 기기: {cam}")
+        # 각 항목을 별도의 줄에 표시
+        parts.append(f"용량: {_human_bytes(file_bytes)}")
+        parts.append(f"해상도: {res_text}")
+        parts.append(f"화소수: {mp_text}")
+        parts.append(f"ISO: {iso}")
+        parts.append(f"초점 거리: {focal_text}")
+        parts.append(f"조리개값: {fn}")
+        parts.append(f"셔터속도: {sh}")
+        parts.append(f"GPS 위도, 경도: {gps_text}")
         return "\n".join(parts)
     except Exception:
         return ""
