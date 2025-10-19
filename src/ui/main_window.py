@@ -167,7 +167,7 @@ class JusawiViewer(QMainWindow):
             self.info_map_label.setFixedSize(720, 440)
             self.info_map_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.info_map_label.setStyleSheet("QLabel { background-color: #2B2B2B; color: #AAAAAA; border: 1px solid #444; }")
-            self.info_map_label.setText("지도 미리보기")
+            self.info_map_label.setText("여기에 지도가 표시됩니다.")
         except Exception:
             pass
         self.info_panel_layout.addWidget(self.info_text)
@@ -655,6 +655,22 @@ class JusawiViewer(QMainWindow):
     def open_natural_search_dialog(self):
         dlg.open_natural_search_dialog(self)
 
+    def open_similar_search_dialog(self):
+        cur = self.current_image_path or ""
+        if not cur or not os.path.isfile(cur):
+            try:
+                self.statusBar().showMessage("먼저 사진을 열어주세요.", 3000)
+            except Exception:
+                pass
+            return
+        folder = os.path.dirname(cur)
+        try:
+            from .similar_search_dialog import SimilarSearchDialog
+            dlg_ = SimilarSearchDialog(self, cur, folder)
+            dlg_.exec()
+        except Exception:
+            pass
+
     # ----- 정보 패널 -----
     def toggle_info_panel(self) -> None:
         try:
@@ -718,7 +734,7 @@ class JusawiViewer(QMainWindow):
                 if getattr(self, "info_text", None) is not None:
                     self.info_text.setPlainText("")
                 if getattr(self, "info_map_label", None) is not None:
-                    self.info_map_label.setText("지도 미리보기")
+                    self.info_map_label.setText("여기에 지도가 표시됩니다.")
             except Exception:
                 pass
             return
@@ -811,11 +827,11 @@ class JusawiViewer(QMainWindow):
                     except Exception:
                         self.info_map_label.setText(f"지도: {lat:.6f}, {lon:.6f}")
                 else:
-                    self.info_map_label.setText("지도 미리보기")
+                    self.info_map_label.setText("여기에 지도가 표시됩니다.")
         except Exception:
             try:
                 if getattr(self, "info_map_label", None) is not None:
-                    self.info_map_label.setText("지도 미리보기")
+                    self.info_map_label.setText("여기에 지도가 표시됩니다.")
             except Exception:
                 pass
 

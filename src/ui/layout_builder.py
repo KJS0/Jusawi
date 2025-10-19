@@ -92,6 +92,13 @@ def build_top_and_status_bars(viewer) -> None:
     # EXIF 버튼 제거됨
     viewer.button_layout.addWidget(viewer.ai_button)
     viewer.button_layout.addWidget(viewer.search_button)
+    # Similar search button
+    try:
+        viewer.similar_button = QPushButton("유사 검색")
+        viewer.similar_button.clicked.connect(viewer.open_similar_search_dialog)
+        viewer.button_layout.addWidget(viewer.similar_button)
+    except Exception:
+        pass
     viewer.button_layout.addWidget(viewer.fullscreen_button)
     viewer.button_layout.addWidget(viewer.prev_button)
     viewer.button_layout.addWidget(viewer.next_button)

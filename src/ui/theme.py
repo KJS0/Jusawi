@@ -65,6 +65,7 @@ def apply_ui_theme_and_spacing(viewer) -> None:
             viewer.rotate_left_button,
             viewer.rotate_right_button,
             viewer.settings_button,
+            getattr(viewer, 'similar_button', None),
         ]:
             if btn:
                 btn.setStyleSheet(button_style)
@@ -78,6 +79,11 @@ def apply_ui_theme_and_spacing(viewer) -> None:
                 viewer.search_button.setStyleSheet("color: #FFFFFF; background-color: transparent;")
             except Exception:
                 pass
+            try:
+                if getattr(viewer, 'similar_button', None):
+                    viewer.similar_button.setStyleSheet("color: #FFFFFF; background-color: transparent;")
+            except Exception:
+                pass
         else:
             # 라이트 테마에서는 전체 버튼과 동일 색 적용
             try:
@@ -86,6 +92,11 @@ def apply_ui_theme_and_spacing(viewer) -> None:
                 pass
             try:
                 viewer.search_button.setStyleSheet(button_style)
+            except Exception:
+                pass
+            try:
+                if getattr(viewer, 'similar_button', None):
+                    viewer.similar_button.setStyleSheet(button_style)
             except Exception:
                 pass
     except Exception:
