@@ -30,9 +30,9 @@ except Exception:
     pass
 
 PROVINCE_MAPPING = {
-    '서울특별시': '서울특별자치시',  # 2024 개정명칭 대응(없으면 원본 유지)
-    '서울시': '서울특별자치시',
-    '서울': '서울특별자치시',
+    '서울특별시': '서울특별시',  # 2024 개정명칭 대응(없으면 원본 유지)
+    '서울시': '서울특별시',
+    '서울': '서울특별시',
     '부산광역시': '부산광역시',
     '부산시': '부산광역시',
     '부산': '부산광역시',
@@ -130,10 +130,10 @@ class GeocodingService:
             addr = (doc.get('address') or {})
             if road:
                 full = road.get('address_name', '')
-                a_type = '도로명주소'
+                a_type = '도로명'
             elif addr:
                 full = addr.get('address_name', '')
-                a_type = '지번주소'
+                a_type = '지번'
             else:
                 return None
             full = standardize_province_name(full)
@@ -178,7 +178,7 @@ class GeocodingService:
 geocoding_service = GeocodingService()
 
 
-def get_google_static_map_png(latitude: float, longitude: float, width: int = 320, height: int = 200, zoom: int = 15) -> Optional[bytes]:
+def get_google_static_map_png(latitude: float, longitude: float, width: int = 640, height: int = 400, zoom: int = 15) -> Optional[bytes]:
     """Google Static Maps PNG 바이트를 반환. 키 없거나 실패 시 None.
 
     주의: Google Cloud에서 Static Maps API가 활성화되어 있어야 합니다.
@@ -200,7 +200,7 @@ def get_google_static_map_png(latitude: float, longitude: float, width: int = 32
             "maptype": "roadmap",
             "markers": f"color:red|{float(latitude)},{float(longitude)}",
             "key": api_key,
-            "scale": "2",  # 고해상도 요청(가능 시)
+            "scale": "3",  # 고해상도 요청(가능 시)
         }
         resp = requests.get(url, params=params, timeout=4)
         if resp.status_code != 200:

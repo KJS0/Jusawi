@@ -1,7 +1,7 @@
 import os
 import sys
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu, QTextEdit  # type: ignore[import]
-from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent, QUrl  # type: ignore[import]
+from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent, QUrl, pyqtSignal, QObject  # type: ignore[import]
 from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap, QMovie, QColorSpace, QDesktopServices  # type: ignore[import]
 
 from .image_view import ImageView
@@ -40,6 +40,7 @@ from ..dnd.dnd_setup import setup_global_dnd as setup_global_dnd_ext, enable_dnd
 from ..services.image_service import ImageService
 from . import dialogs as dlg
 from ..utils.logging_setup import get_logger, get_log_dir, export_logs_zip, suggest_logs_zip_name, open_logs_folder
+from ..services.ratings_store import get_image as ratings_get_image, upsert_image as ratings_upsert_image  # type: ignore
 
 class JusawiViewer(QMainWindow):
     def __init__(self, skip_session_restore: bool = False):
@@ -160,15 +161,22 @@ class JusawiViewer(QMainWindow):
         try:
             self.info_text.setReadOnly(True)
             self.info_text.setMinimumWidth(280)
-            self.info_text.setStyleSheet("QTextEdit { color: #EAEAEA; background-color: #2B2B2B; border: 1px solid #444; }")
+            # 초기 스타일은 테마 적용 루틴에서 재설정됨(여기선 최소한만)
+            self.info_text.setStyleSheet("QTextEdit { font-size: 24px; line-height: 140%; }")
+            # 지도 레이어와 동일한 너비로 고정(초기값은 지도 라벨 설정 이후 다시 맞춤)
         except Exception:
             pass
         self.info_map_label = QLabel(self.info_panel)
         try:
-            self.info_map_label.setFixedSize(720, 440)
+            # 초기 크기는 이후 _update_info_panel_sizes에서 창 크기에 맞춰 조정됨
             self.info_map_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.info_map_label.setStyleSheet("QLabel { background-color: #2B2B2B; color: #AAAAAA; border: 1px solid #444; }")
             self.info_map_label.setText("여기에 지도가 표시됩니다.")
+            try:
+                # 지도 라벨과 동일한 너비를 정보 텍스트에도 적용
+                self.info_text.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+            except Exception:
+                pass
         except Exception:
             pass
         self.info_panel_layout.addWidget(self.info_text)
@@ -184,6 +192,38 @@ class JusawiViewer(QMainWindow):
         except Exception:
             pass
         self.main_layout.addWidget(self.filmstrip, 0)
+
+        # 필름 스트립 컨트롤 바(별점/플래그)
+        try:
+            self._rating_flag_bar = QWidget(self)
+            bar_layout = QHBoxLayout(self._rating_flag_bar)
+            bar_layout.setContentsMargins(0, 0, 0, 0)
+            bar_layout.setSpacing(8)
+            bar_layout.addStretch(1)
+            # 별 5개
+            self._stars: list[QLabel] = []
+            for i in range(1, 6):
+                lb = QLabel("☆", self._rating_flag_bar)
+                lb.setStyleSheet("color:#EAEAEA; font-size:16px;")
+                lb.setCursor(Qt.CursorShape.PointingHandCursor)
+                # 클릭 연결
+                lb.mousePressEvent = (lambda e, n=i: self._on_set_rating(n))  # type: ignore[assignment]
+                self._stars.append(lb)
+                bar_layout.addWidget(lb)
+            bar_layout.addSpacing(16)
+            # 플래그 버튼: Pick(✔), Rejected(✖)만 표시
+            self._flag_pick = QPushButton("✔", self._rating_flag_bar)
+            self._flag_rej = QPushButton("✖", self._rating_flag_bar)
+            for b in (self._flag_pick, self._flag_rej):
+                b.setStyleSheet("color:#EAEAEA; background:transparent; border:1px solid #555; padding:2px 6px;")
+                bar_layout.addWidget(b)
+            # 동일 버튼을 다시 누르면 unflag로 토글
+            self._flag_pick.clicked.connect(lambda: self._on_set_flag('pick'))
+            self._flag_rej.clicked.connect(lambda: self._on_set_flag('rejected'))
+            bar_layout.addStretch(1)
+            self.main_layout.addWidget(self._rating_flag_bar, 0)
+        except Exception:
+            pass
 
         # 이미지 서비스
         self.image_service = ImageService(self)
@@ -236,6 +276,48 @@ class JusawiViewer(QMainWindow):
 
         self.update_status_left()
         self.update_status_right()
+
+        # 단축키: 별점 0..5, 플래그 Z/X/C
+        try:
+            self._rating_shortcuts = []
+            for n in range(0, 6):
+                sc = QShortcut(QKeySequence(str(n)), self)
+                sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                sc.activated.connect(lambda n=n: self._on_set_rating(n))
+                self._rating_shortcuts.append(sc)
+            # 플래그 단축키: Z=pick, X=rejected, C=unflag
+            self._flag_sc_z = QShortcut(QKeySequence("Z"), self)
+            self._flag_sc_z.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            self._flag_sc_z.activated.connect(lambda: self._on_set_flag('pick'))
+            self._flag_sc_x = QShortcut(QKeySequence("X"), self)
+            self._flag_sc_x.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            self._flag_sc_x.activated.connect(lambda: self._on_set_flag('rejected'))
+            self._flag_sc_c = QShortcut(QKeySequence("C"), self)
+            self._flag_sc_c.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            self._flag_sc_c.activated.connect(lambda: self._on_set_flag('unflagged'))
+        except Exception:
+            pass
+
+        # 지도 디바운스/토큰
+        self._map_req_token = 0
+        self._map_debounce = QTimer(self)
+        self._map_debounce.setSingleShot(True)
+        self._map_debounce.setInterval(300)
+        self._map_debounce.timeout.connect(self._kick_map_fetch)
+        # 지도 비동기 신호 emitter 복구
+        class _MapEmitter(QObject):
+            ready = pyqtSignal(int, QPixmap)
+        self._map_emitter = _MapEmitter(self)
+        try:
+            self._map_emitter.ready.connect(self._on_map_ready)
+        except Exception:
+            pass
+
+        # 초기 레이아웃 사이즈 조정
+        try:
+            self._update_info_panel_sizes()
+        except Exception:
+            pass
 
         # 키보드 단축키 설정
         self.setup_shortcuts()
@@ -529,27 +611,69 @@ class JusawiViewer(QMainWindow):
 
     def _apply_loaded_image(self, path: str, img: QImage, source: str):
         img_loader.apply_loaded_image(self, path, img, source)
+        try:
+            self._refresh_rating_flag_bar()
+        except Exception:
+            pass
 
     def _on_screen_changed(self, screen):
         ds.on_screen_changed(self, screen)
 
     def _on_dpi_changed(self, *args):
         ds.on_dpi_changed(self, *args)
+        try:
+            self._update_info_panel_sizes()
+        except Exception:
+            pass
 
     def _begin_dpr_transition(self, guard_ms: int = 160):
         ds.begin_dpr_transition(self, guard_ms)
 
     def _ensure_screen_signal_connected(self):
         ds.ensure_screen_signal_connected(self)
+        try:
+            self._update_info_panel_sizes()
+        except Exception:
+            pass
 
     def showEvent(self, event):
         super().showEvent(event)
         lifecycle.on_show(self, event)
+        try:
+            self._update_info_panel_sizes()
+        except Exception:
+            pass
 
     def event(self, e):
         if lifecycle.before_event(self, e):
             return super().event(e)
         return super().event(e)
+
+    def keyPressEvent(self, event):
+        try:
+            # 숫자 0..5: 별점 바로 적용 (충돌 단축키보다 우선 처리)
+            if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                k = event.key()
+                if Qt.Key.Key_0 <= k <= Qt.Key.Key_5:
+                    self._on_set_rating(int(k) - int(Qt.Key.Key_0))
+                    event.accept()
+                    return
+                # 플래그: Z=pick, X=rejected, C=unflagged
+                if k == Qt.Key.Key_Z:
+                    self._on_set_flag('pick')
+                    event.accept()
+                    return
+                if k == Qt.Key.Key_X:
+                    self._on_set_flag('rejected')
+                    event.accept()
+                    return
+                if k == Qt.Key.Key_C:
+                    self._on_set_flag('unflagged')
+                    event.accept()
+                    return
+        except Exception:
+            pass
+        super().keyPressEvent(event)
 
     def _preload_neighbors(self):
         img_loader.preload_neighbors(self)
@@ -560,6 +684,177 @@ class JusawiViewer(QMainWindow):
 
     def _apply_ui_theme_and_spacing(self):
         apply_theme(self)
+        try:
+            self._update_info_panel_sizes()
+        except Exception:
+            pass
+        # 필름 스트립/컨트롤 바 테마 반영
+        try:
+            is_light = (getattr(self, "_resolved_theme", "dark") == "light")
+            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                try:
+                    self.filmstrip.apply_theme(is_light)
+                except Exception:
+                    pass
+            # 별점/플래그 컨트롤 바 텍스트 색
+            col = "#111111" if is_light else "#EAEAEA"
+            try:
+                for lb in getattr(self, "_stars", []):
+                    lb.setStyleSheet(f"color:{col}; font-size:16px;")
+            except Exception:
+                pass
+            try:
+                for b in [getattr(self, "_flag_pick", None), getattr(self, "_flag_rej", None)]:
+                    if not b:
+                        continue
+                    if is_light:
+                        # 라이트 모드: 버튼 배경을 다크 톤으로 하여 가독성 향상
+                        b.setStyleSheet("color:#111111; background:#E0E0E0; border:1px solid #9E9E9E; padding:2px 6px; border-radius:4px;")
+                    else:
+                        b.setStyleSheet("color:#EAEAEA; background:transparent; border:1px solid #555; padding:2px 6px;")
+            except Exception:
+                pass
+            # 정보 패널(텍스트/지도) 라이트 테마 반영
+            try:
+                if getattr(self, 'info_text', None) is not None:
+                    if is_light:
+                        self.info_text.setStyleSheet("QTextEdit { color: #111111; background-color: #FFFFFF; border: 1px solid #CCCCCC; font-size: 20px; line-height: 140%; } QTextEdit:disabled { color: #999999; }")
+                    else:
+                        self.info_text.setStyleSheet("QTextEdit { color: #EAEAEA; background-color: #2B2B2B; border: 1px solid #444; font-size: 20px; line-height: 140%; } QTextEdit:disabled { color: #777777; }")
+            except Exception:
+                pass
+            try:
+                if getattr(self, 'info_map_label', None) is not None:
+                    if is_light:
+                        self.info_map_label.setStyleSheet("QLabel { background-color: #FAFAFA; color: #222222; border: 1px solid #CCCCCC; }")
+                    else:
+                        self.info_map_label.setStyleSheet("QLabel { background-color: #2B2B2B; color: #AAAAAA; border: 1px solid #444; }")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _refresh_rating_flag_bar(self):
+        try:
+            if not hasattr(self, "_rating_flag_bar") or self._rating_flag_bar is None:
+                return
+            path = None
+            try:
+                if 0 <= self.current_image_index < len(self.image_files_in_dir):
+                    path = self.image_files_in_dir[self.current_image_index]
+            except Exception:
+                path = None
+            rating = 0
+            flag = "unflagged"
+            if path:
+                row = ratings_get_image(path) or {}
+                if not row:
+                    # 새 파일이면 기본값을 DB에 저장해 이후 세션에도 유지
+                    try:
+                        st = os.stat(path)
+                        mt = int(st.st_mtime)
+                    except Exception:
+                        mt = 0
+                    from ..services.ratings_store import upsert_image as _up
+                    _up(path, mt, rating=0, label=None, flag='unflagged')
+                    row = {"rating": 0, "flag": "unflagged"}
+                rating = int(row.get("rating", 0))
+                flag = str(row.get("flag", "unflagged"))
+            # 별 상태 반영
+            try:
+                for i, lb in enumerate(getattr(self, "_stars", []), start=1):
+                    lb.setText("★" if i <= max(0, rating) else "☆")
+            except Exception:
+                pass
+            # 플래그 버튼 상태(시각 강조) - 테마 인지형
+            is_light = (getattr(self, "_resolved_theme", "dark") == "light")
+            def _style(btn, active_color_bg: str, active_text: str = "#FFFFFF"):
+                if not btn:
+                    return
+                if is_light:
+                    btn.setStyleSheet(f"color:{active_text}; background:{active_color_bg}; border:1px solid {active_color_bg}; padding:2px 6px; border-radius:4px;")
+                else:
+                    btn.setStyleSheet(f"color:#EAEAEA; background:{active_color_bg}; border:1px solid #555; padding:2px 6px;")
+            def _style_inactive(btn):
+                if not btn:
+                    return
+                if is_light:
+                    btn.setStyleSheet("color:#111111; background:#E0E0E0; border:1px solid #9E9E9E; padding:2px 6px; border-radius:4px;")
+                else:
+                    btn.setStyleSheet("color:#EAEAEA; background:transparent; border:1px solid #555; padding:2px 6px;")
+            # pick / rejected / unflag 상태 반영
+            if flag == "pick":
+                _style(self._flag_pick, "#2E7D32")
+                _style_inactive(self._flag_rej)
+            elif flag == "rejected":
+                _style_inactive(self._flag_pick)
+                _style(self._flag_rej, "#D32F2F", active_text="#FFFFFF")
+            else:  # unflag
+                _style_inactive(self._flag_pick)
+                _style_inactive(self._flag_rej)
+        except Exception:
+            pass
+
+    def _on_set_rating(self, n: int):
+        try:
+            if not (0 <= self.current_image_index < len(self.image_files_in_dir)):
+                return
+            path = self.image_files_in_dir[self.current_image_index]
+            new_rating = int(n)
+            # 즉시 UI 반영(내부 DB) 및 저장
+            try:
+                st = os.stat(path)
+                mt = int(st.st_mtime)
+            except Exception:
+                mt = 0
+            row = ratings_get_image(path) or {}
+            if not row:
+                ratings_upsert_image(path, mt, rating=new_rating, label=None, flag='unflagged')
+            else:
+                ratings_upsert_image(path, mt, rating=new_rating, label=row.get("label"), flag=row.get("flag", "unflagged"))
+            try:
+                self.filmstrip.update_item_meta_by_path(path, rating=new_rating)
+            except Exception:
+                pass
+            self._refresh_rating_flag_bar()
+        except Exception:
+            pass
+
+    def _on_set_flag(self, f: str):
+        try:
+            if not (0 <= self.current_image_index < len(self.image_files_in_dir)):
+                return
+            path = self.image_files_in_dir[self.current_image_index]
+            # 즉시 UI 반영(내부 DB) 및 저장
+            try:
+                st = os.stat(path)
+                mt = int(st.st_mtime)
+            except Exception:
+                mt = 0
+            row = ratings_get_image(path) or {}
+            if f == 'rejected':
+                # 별점은 유지, 플래그만 rejected로 설정
+                cur_rating = int(row.get("rating", 0)) if row else 0
+                if not row:
+                    ratings_upsert_image(path, mt, rating=cur_rating, label=None, flag='rejected')
+                else:
+                    ratings_upsert_image(path, mt, rating=cur_rating, label=row.get("label"), flag='rejected')
+                self.filmstrip.update_item_meta_by_path(path, rating=cur_rating, flag='rejected')
+                self._refresh_rating_flag_bar()
+            elif f == 'pick':
+                cur_rating = int(row.get("rating", 0)) if row else 0
+                ratings_upsert_image(path, mt, rating=cur_rating, label='Green', flag='pick')
+                self.filmstrip.update_item_meta_by_path(path, label='Green', flag='pick')
+                self._refresh_rating_flag_bar()
+            elif f == 'unflagged':
+                cur_rating = int(row.get("rating", 0)) if row else 0
+                if cur_rating < 0:
+                    cur_rating = 0
+                ratings_upsert_image(path, mt, rating=cur_rating, label=None, flag='unflagged')
+                self.filmstrip.update_item_meta_by_path(path, rating=cur_rating, label=None, flag='unflagged')
+                self._refresh_rating_flag_bar()
+        except Exception:
+            pass
 
     def toggle_fullscreen(self):
         """전체화면 모드 토글"""
@@ -587,10 +882,30 @@ class JusawiViewer(QMainWindow):
     def enter_fullscreen(self):
         """전체화면 모드 진입 (애니메이션 없이)"""
         fs_enter_fullscreen(self)
+        try:
+            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                self.filmstrip.setVisible(False)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                self._rating_flag_bar.setVisible(False)
+        except Exception:
+            pass
 
     def exit_fullscreen(self):
         """전체화면 모드 종료 (제목표시줄 보장)"""
         fs_exit_fullscreen(self)
+        try:
+            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                self.filmstrip.setVisible(True)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                self._rating_flag_bar.setVisible(True)
+        except Exception:
+            pass
 
     def handle_escape(self):
         util_handle_escape(self)
@@ -814,33 +1129,23 @@ class JusawiViewer(QMainWindow):
                     address_text = None
             # 지도 라벨(Static Map 이미지) 갱신
             if getattr(self, "info_map_label", None) is not None:
-                if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and self.info_panel.isVisible():
+                    # 비동기 요청 스케줄 및 레이어 표시
                     try:
-                        from ..services.geocoding import get_google_static_map_png  # type: ignore
-                        img_bytes = get_google_static_map_png(float(lat), float(lon), width=720, height=440, zoom=12)
-                        if img_bytes:
-                            from PyQt6.QtGui import QPixmap  # type: ignore[import]
-                            from PyQt6.QtCore import QByteArray  # type: ignore[import]
-                            ba = QByteArray(img_bytes)
-                            pix = QPixmap()
-                            if pix.loadFromData(ba):
-                                self.info_map_label.setPixmap(pix)
-                                try:
-                                    self.info_map_label.setToolTip(f"https://www.google.com/maps?q={lat},{lon}")
-                                except Exception:
-                                    pass
-                            else:
-                                self.info_map_label.setText(f"지도: {lat:.6f}, {lon:.6f}")
-                        else:
-                            self.info_map_label.setText(f"지도: {lat:.6f}, {lon:.6f}")
+                        self.info_map_label.setVisible(True)
                     except Exception:
-                        self.info_map_label.setText(f"지도: {lat:.6f}, {lon:.6f}")
+                        pass
+                    self._schedule_map_fetch(float(lat), float(lon), 600, 360, 12)
                 else:
-                    self.info_map_label.setText("여기에 지도가 표시됩니다.")
+                    # 주소/GPS 없으면 지도 레이어 숨김(공간 미할당)
+                    try:
+                        self.info_map_label.setVisible(False)
+                    except Exception:
+                        pass
         except Exception:
             try:
                 if getattr(self, "info_map_label", None) is not None:
-                    self.info_map_label.setText("여기에 지도가 표시됩니다.")
+                    self.info_map_label.setVisible(False)
             except Exception:
                 pass
 
@@ -870,11 +1175,11 @@ class JusawiViewer(QMainWindow):
                 inserted = False
                 for i, line in enumerate(lines):
                     if line.strip().startswith("GPS 위도, 경도:"):
-                        lines.insert(i + 1, f"주소: {address_text}")
+                        lines.insert(i + 1, f"{address_text}")
                         inserted = True
                         break
                 if not inserted and summary_text:
-                    lines.append(f"주소: {address_text}")
+                    lines.append(f"{address_text}")
                 if lines:
                     summary_text = "\n".join(lines)
         except Exception:
@@ -959,6 +1264,70 @@ class JusawiViewer(QMainWindow):
 
     # EXIF 탭 제거됨
 
+    # ----- 지도 비동기 로딩 유틸 -----
+    def _schedule_map_fetch(self, lat: float, lon: float, w: int, h: int, zoom: int):
+        self._pending_map = (lat, lon, w, h, zoom)
+        try:
+            self._map_debounce.start()
+        except Exception:
+            self._kick_map_fetch()
+
+    def _kick_map_fetch(self):
+        if not hasattr(self, "_pending_map"):
+            return
+        lat, lon, w, h, zoom = self._pending_map
+        self._map_req_token += 1
+        token = int(self._map_req_token)
+        try:
+            from ..services.map_cache import submit_fetch  # type: ignore
+            submit_fetch(lat, lon, int(w), int(h), int(zoom), token, self._map_emitter, "ready")
+        except Exception:
+            pass
+
+    def _on_map_ready(self, token: int, pm):
+        if token != getattr(self, "_map_req_token", 0):
+            return
+        if getattr(self, "info_map_label", None) is None:
+            return
+        try:
+            from PyQt6.QtGui import QPixmap  # type: ignore
+        except Exception:
+            QPixmap = None  # type: ignore
+        if pm is not None and (QPixmap is None or isinstance(pm, QPixmap)) and not pm.isNull():
+            try:
+                self.info_map_label.setPixmap(pm)
+                self.info_map_label.setVisible(True)
+            except Exception:
+                pass
+        else:
+            # 실패 시 지도 레이어 숨김
+            try:
+                self.info_map_label.setVisible(False)
+            except Exception:
+                pass
+
+    def _update_info_panel_sizes(self):
+        try:
+            # 창 너비에 따라 지도와 텍스트 폭/폰트 크기 조정
+            total_w = max(640, int(self.width()))
+            panel_w = max(360, int(total_w * 0.42))  # 사진 우선: 패널은 ~42%
+            panel_h = int(panel_w * 0.61)  # 16:10 근사 비율
+            if getattr(self, "info_map_label", None) is not None:
+                try:
+                    self.info_map_label.setFixedSize(panel_w, panel_h)
+                except Exception:
+                    pass
+            if getattr(self, "info_text", None) is not None:
+                try:
+                    self.info_text.setFixedWidth(panel_w)
+                    # 폰트 크기: 창이 작을수록 축소(16~24px)
+                    scaled = max(16, min(24, int(total_w / 80)))
+                    self.info_text.setStyleSheet(f"QTextEdit {{ color: #EAEAEA; background-color: #2B2B2B; border: 1px solid #444; font-size: {scaled}px; line-height: 140%; }}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def scan_directory(self, dir_path):
         try:
             self.log.info("scan_dir_start | dir=%s", os.path.basename(dir_path or ""))
@@ -1035,6 +1404,10 @@ class JusawiViewer(QMainWindow):
                     self.filmstrip.set_current_index(row)
                 except Exception:
                     pass
+                try:
+                    self._refresh_rating_flag_bar()
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1043,6 +1416,10 @@ class JusawiViewer(QMainWindow):
             self._nav.load_image_at_current_index()
         else:
             nav_load_image_at_current_index(self)
+        try:
+            self._refresh_rating_flag_bar()
+        except Exception:
+            pass
 
     def update_button_states(self):
         if getattr(self, "_nav", None):

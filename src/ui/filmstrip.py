@@ -42,6 +42,9 @@ class Roles:
     PathRole = Qt.ItemDataRole.UserRole + 1
     PixmapRole = Qt.ItemDataRole.UserRole + 2
     MetaRole = Qt.ItemDataRole.UserRole + 3
+    RatingRole = Qt.ItemDataRole.UserRole + 4
+    FlagRole = Qt.ItemDataRole.UserRole + 5
+    LabelRole = Qt.ItemDataRole.UserRole + 6
 
 
 @dataclass
@@ -167,7 +170,18 @@ class FilmstripModel(QAbstractListModel):
                 mt = float(st.st_mtime)
             except Exception:
                 mt = 0.0
-            items.append(FilmItem(path=p, mtime=mt, meta={}))
+            # ratings_store에서 기존 값이 있으면 로드
+            meta: Dict = {}
+            try:
+                from ..services.ratings_store import get_image  # type: ignore
+                row = get_image(p)
+                if row:
+                    meta["rating"] = int(row.get("rating", 0))
+                    meta["label"] = row.get("label")
+                    meta["flag"] = row.get("flag") or "unflagged"
+            except Exception:
+                pass
+            items.append(FilmItem(path=p, mtime=mt, meta=meta))
         self.beginResetModel()
         self._items = items
         self._pix.clear()
@@ -187,6 +201,12 @@ class FilmstripModel(QAbstractListModel):
             return it.path
         if role == Roles.MetaRole:
             return it.meta
+        if role == Roles.RatingRole:
+            return (it.meta or {}).get("rating", 0)
+        if role == Roles.FlagRole:
+            return (it.meta or {}).get("flag", "unflagged")
+        if role == Roles.LabelRole:
+            return (it.meta or {}).get("label")
         if role == Roles.PixmapRole:
             pm = self._pix.get(idx.row())
             if pm is None or pm.isNull():
@@ -232,6 +252,19 @@ class FilmstripModel(QAbstractListModel):
 
     # 메타 업데이트는 사용하지 않음
 
+    # --- 외부 갱신용 메타 업데이트 ---
+    def update_item_meta_by_path(self, path: str, rating=None, label=None, flag=None) -> None:
+        for i, it in enumerate(self._items):
+            if os.path.normcase(it.path) == os.path.normcase(path):
+                if rating is not None:
+                    it.meta["rating"] = int(rating)
+                if label is not None or label is None:
+                    it.meta["label"] = label
+                if flag is not None:
+                    it.meta["flag"] = str(flag)
+                self.dataChanged.emit(self.index(i, 0), self.index(i, 0), [Roles.MetaRole, Roles.RatingRole, Roles.LabelRole, Roles.FlagRole])
+                return
+
 
 class FilmstripDelegate(QStyledItemDelegate):
     def __init__(self, get_size_callable, parent=None):
@@ -244,7 +277,22 @@ class FilmstripDelegate(QStyledItemDelegate):
         r = option.rect
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(r, QColor("#2B2B2B"))
+        # 필름 스트립은 라이트 모드에서도 다크 테마와 동일 스타일(요청사항)
+        bg_col = QColor("#2B2B2B")
+        sel_col = QColor("#4DA3FF")
+        painter.fillRect(r, bg_col)
+        # 상태값 미리 추출
+        try:
+            rating = int(index.data(Roles.RatingRole) or 0)
+        except Exception:
+            rating = 0
+        try:
+            flag = str(index.data(Roles.FlagRole) or "unflagged")
+        except Exception:
+            flag = "unflagged"
+        label = index.data(Roles.LabelRole)
+        is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
+
         # 썸네일 중앙 배치(파일명은 숨김). DPR을 고려해 DIP 기준으로 정렬
         pm = index.data(Roles.PixmapRole)
         if isinstance(pm, QPixmap) and not pm.isNull():
@@ -257,12 +305,20 @@ class FilmstripDelegate(QStyledItemDelegate):
             dph = max(1, int(round(ph / max(1.0, dpr))))
             x = r.x() + (r.width() - dpw) // 2
             y = r.y() + (r.height() - dph) // 2
-            painter.drawPixmap(x, y, pm)
+            if flag == "rejected" and not is_selected:
+                painter.save()
+                painter.setOpacity(0.35)
+                painter.drawPixmap(x, y, pm)
+                painter.restore()
+            else:
+                painter.drawPixmap(x, y, pm)
+        else:
+            # 픽스맵이 아직 없을 때(로딩 전)도 테마 배경이 보이도록 칠해 둠
+            painter.fillRect(r.adjusted(6, 6, -6, -6), bg_col)
         if option.state & QStyle.StateFlag.State_Selected:
-            pen = QPen(QColor("#4DA3FF"), 3)
+            pen = QPen(sel_col, 3)
             painter.setPen(pen)
             painter.drawRoundedRect(r.adjusted(2, 2, -2, -2), 4, 4)
-        # 파일명은 비표시
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
@@ -288,12 +344,20 @@ class FilmstripView(QListView):
         self.setMovement(QListView.Movement.Static)
         self.setResizeMode(QListView.ResizeMode.Adjust)
         self.setWrapping(False)
-        self.setSpacing(6)
+        # 라이트 모드에서도 다크 배경 경계처럼 보이도록 간격을 0으로(요청) 
+        self.setSpacing(0)
         self.setUniformItemSizes(True)
         self.setSelectionMode(QListView.SelectionMode.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollMode(QListView.ScrollMode.ScrollPerPixel)
-        self.setStyleSheet("QListView { background: #1F1F1F; }")
+        # 초기 테마 적용은 부모 뷰어의 _resolved_theme를 참조하여 동적으로 설정됨
+        try:
+            viewer = self.parent().parent() if self.parent() else None
+            is_light = (getattr(viewer, "_resolved_theme", "dark") == "light")
+            bg = "#F7F7F7" if is_light else "#1F1F1F"
+            self.setStyleSheet(f"QListView, QListView::viewport {{ background-color: {bg}; }}")
+        except Exception:
+            self.setStyleSheet("QListView, QListView::viewport { background-color: #1F1F1F; }")
 
         try:
             self.selectionModel().selectionChanged.connect(self._on_selection_changed)
@@ -322,9 +386,33 @@ class FilmstripView(QListView):
         except Exception:
             return 1.0
 
+    # 외부에서 메타 변경 시 갱신
+    def update_item_meta_by_path(self, path: str, rating=None, label=None, flag=None) -> None:
+        try:
+            self._model.update_item_meta_by_path(path, rating=rating, label=label, flag=flag)
+        except Exception:
+            pass
+
     def _update_fixed_height(self):
         h = self._target_size() + 28 + 4
         self.setFixedHeight(h)
+
+    def apply_theme(self, is_light: bool) -> None:
+        try:
+            bg = "#F7F7F7" if bool(is_light) else "#1F1F1F"
+            self.setStyleSheet(f"QListView, QListView::viewport {{ background-color: {bg}; }}")
+            try:
+                from PyQt6.QtGui import QPalette, QColor  # type: ignore
+                pal = self.viewport().palette()
+                pal.setColor(QPalette.ColorRole.Base, QColor(bg))
+                pal.setColor(QPalette.ColorRole.Window, QColor(bg))
+                self.viewport().setPalette(pal)
+                self.viewport().setAutoFillBackground(True)
+            except Exception:
+                pass
+            self.viewport().update()
+        except Exception:
+            pass
 
     def set_items(self, paths: List[str], current_index: int = -1):
         self._model.set_items(paths, current_index)
