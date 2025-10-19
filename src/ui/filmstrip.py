@@ -1,0 +1,397 @@
+from __future__ import annotations
+
+import os
+import hashlib
+import threading
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple
+
+from PyQt6.QtCore import (
+    Qt, QSize, QRect, QModelIndex, QAbstractListModel, pyqtSignal, pyqtSlot, QRunnable, QThreadPool, QStandardPaths
+)
+from PyQt6.QtGui import (
+    QPixmap, QPainter, QPen, QColor, QFont, QImageReader
+)
+from PyQt6.QtWidgets import (
+    QListView, QStyledItemDelegate, QStyleOptionViewItem, QWidget, QApplication, QStyle
+)
+
+
+# 썸네일 크기 단계(짧은 변 기준)
+THUMB_STEPS = [72, 96, 128, 160]
+
+
+def _cache_root() -> str:
+    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".cache", "Jusawi")
+    path = os.path.join(base, "thumbs")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def cache_key(path: str, mtime: float, size: int) -> str:
+    h = hashlib.sha1()
+    h.update(path.encode("utf-8", errors="ignore"))
+    h.update(str(int(mtime)).encode("ascii"))
+    h.update(str(int(size)).encode("ascii"))
+    return h.hexdigest()
+
+
+class Roles:
+    PathRole = Qt.ItemDataRole.UserRole + 1
+    PixmapRole = Qt.ItemDataRole.UserRole + 2
+    MetaRole = Qt.ItemDataRole.UserRole + 3
+
+
+@dataclass
+class FilmItem:
+    path: str
+    mtime: float
+    meta: Dict
+
+
+class ThumbCache:
+    def __init__(self, quality: int = 85):
+        self.root = _cache_root()
+        self.quality = int(quality)
+        self._mem: Dict[str, QPixmap] = {}
+        self._lock = threading.Lock()
+
+    def _disk_path(self, key: str, size: int) -> str:
+        return os.path.join(self.root, f"{key}_{size}.jpg")
+
+    def get_pixmap(self, key: str, size: int) -> Optional[QPixmap]:
+        with self._lock:
+            pm = self._mem.get(f"{key}|{size}")
+            if pm is not None and not pm.isNull():
+                return pm
+        p = self._disk_path(key, size)
+        if os.path.exists(p):
+            pm = QPixmap(p)
+            if not pm.isNull():
+                with self._lock:
+                    self._mem[f"{key}|{size}"] = pm
+                return pm
+        return None
+
+    def put_pixmap(self, key: str, size: int, pm: QPixmap):
+        if pm is None or pm.isNull():
+            return
+        with self._lock:
+            self._mem[f"{key}|{size}"] = pm
+        p = self._disk_path(key, size)
+        try:
+            pm.save(p, "JPG", self.quality)
+        except Exception:
+            pass
+
+
+## EXIF 메타는 필름 스트립에서 사용하지 않음(썸네일/경로만)
+
+class ThumbTask(QRunnable):
+    def __init__(self, row: int, path: str, mtime: float, size: int, cache: ThumbCache, signal, dpr: float = 1.0):
+        super().__init__()
+        self.row = row
+        self.path = path
+        self.mtime = mtime
+        self.size = int(size)
+        try:
+            self._dpr = float(dpr)
+        except Exception:
+            self._dpr = 1.0
+        self.cache = cache
+        self.signal = signal
+
+    def run(self):
+        eff_px = max(1, int(round(self.size * max(1.0, self._dpr))))
+        key = cache_key(self.path, self.mtime, eff_px)
+        pm = self.cache.get_pixmap(key, eff_px)
+        if pm is not None:
+            self.signal.emit(self.row, pm)
+            return
+        reader = QImageReader(self.path)
+        reader.setAutoTransform(True)
+        try:
+            orig = reader.size()
+            ow, oh = int(orig.width()), int(orig.height())
+            if ow > 0 and oh > 0:
+                if ow < oh:
+                    target_w = eff_px
+                    target_h = int(eff_px * oh / max(1, ow))
+                else:
+                    target_w = int(eff_px * ow / max(1, oh))
+                    target_h = eff_px
+                reader.setScaledSize(QSize(target_w, target_h))
+        except Exception:
+            pass
+        img = reader.read()
+        if img.isNull():
+            self.signal.emit(self.row, QPixmap())
+            return
+        if img.width() > eff_px or img.height() > eff_px:
+            img = img.scaled(eff_px, eff_px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        pm = QPixmap.fromImage(img)
+        try:
+            if hasattr(pm, 'setDevicePixelRatio'):
+                pm.setDevicePixelRatio(max(1.0, self._dpr))
+        except Exception:
+            pass
+        if not pm.isNull():
+            self.cache.put_pixmap(key, eff_px, pm)
+        self.signal.emit(self.row, pm)
+
+
+class FilmstripModel(QAbstractListModel):
+    thumbReady = pyqtSignal(int, QPixmap)
+
+    def __init__(self, cache: ThumbCache, pool: QThreadPool, get_size_callable, get_dpr_callable):
+        super().__init__()
+        self._items: List[FilmItem] = []
+        self._pix: Dict[int, QPixmap] = {}
+        self._cache = cache
+        self._pool = pool
+        self._get_size = get_size_callable
+        self._get_dpr = get_dpr_callable
+        self.thumbReady.connect(self._on_thumb_ready)
+        self._paths_sig: Tuple[str, ...] = tuple()
+
+    def set_items(self, paths: List[str], current_index: int = -1):
+        new_sig = tuple(paths)
+        if new_sig == self._paths_sig:
+            return
+        items: List[FilmItem] = []
+        for p in paths:
+            try:
+                st = os.stat(p)
+                mt = float(st.st_mtime)
+            except Exception:
+                mt = 0.0
+            items.append(FilmItem(path=p, mtime=mt, meta={}))
+        self.beginResetModel()
+        self._items = items
+        self._pix.clear()
+        self._paths_sig = new_sig
+        self.endResetModel()
+        if 0 <= current_index < len(self._items):
+            self.dataChanged.emit(self.index(current_index, 0), self.index(current_index, 0), [])
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return len(self._items)
+
+    def data(self, idx: QModelIndex, role: int):
+        if not idx.isValid():
+            return None
+        it = self._items[idx.row()]
+        if role == Roles.PathRole:
+            return it.path
+        if role == Roles.MetaRole:
+            return it.meta
+        if role == Roles.PixmapRole:
+            pm = self._pix.get(idx.row())
+            if pm is None or pm.isNull():
+                self._maybe_request_thumb(idx.row())
+            return pm
+        if role == Qt.ItemDataRole.ToolTipRole:
+            # 파일명만 툴팁으로 표시
+            return os.path.basename(it.path)
+        if role == Qt.ItemDataRole.AccessibleTextRole:
+            return os.path.basename(it.path)
+        return None
+
+    def _maybe_request_thumb(self, row: int):
+        if not (0 <= row < len(self._items)):
+            return
+        it = self._items[row]
+        size = int(self._get_size())
+        try:
+            dpr = float(self._get_dpr())
+        except Exception:
+            dpr = 1.0
+        eff_px = max(1, int(round(size * max(1.0, dpr))))
+        key = cache_key(it.path, it.mtime, eff_px)
+        pm = self._cache.get_pixmap(key, eff_px)
+        if pm is not None:
+            try:
+                if hasattr(pm, 'setDevicePixelRatio'):
+                    pm.setDevicePixelRatio(max(1.0, dpr))
+            except Exception:
+                pass
+            self._pix[row] = pm
+            self.dataChanged.emit(self.index(row, 0), self.index(row, 0), [Roles.PixmapRole])
+            return
+        task = ThumbTask(row, it.path, it.mtime, size, self._cache, self.thumbReady, dpr)
+        self._pool.start(task)
+
+    @pyqtSlot(int, QPixmap)
+    def _on_thumb_ready(self, row: int, pm: QPixmap):
+        if not (0 <= row < len(self._items)):
+            return
+        self._pix[row] = pm
+        self.dataChanged.emit(self.index(row, 0), self.index(row, 0), [Roles.PixmapRole])
+
+    # 메타 업데이트는 사용하지 않음
+
+
+class FilmstripDelegate(QStyledItemDelegate):
+    def __init__(self, get_size_callable, parent=None):
+        super().__init__(parent)
+        self._get_size = get_size_callable
+        self._label_font = QFont()
+        self._label_font.setPointSize(8)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
+        r = option.rect
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(r, QColor("#2B2B2B"))
+        # 썸네일 중앙 배치(파일명은 숨김). DPR을 고려해 DIP 기준으로 정렬
+        pm = index.data(Roles.PixmapRole)
+        if isinstance(pm, QPixmap) and not pm.isNull():
+            try:
+                dpr = float(getattr(pm, 'devicePixelRatio', lambda: 1.0)())
+            except Exception:
+                dpr = 1.0
+            pw, ph = pm.width(), pm.height()
+            dpw = max(1, int(round(pw / max(1.0, dpr))))
+            dph = max(1, int(round(ph / max(1.0, dpr))))
+            x = r.x() + (r.width() - dpw) // 2
+            y = r.y() + (r.height() - dph) // 2
+            painter.drawPixmap(x, y, pm)
+        if option.state & QStyle.StateFlag.State_Selected:
+            pen = QPen(QColor("#4DA3FF"), 3)
+            painter.setPen(pen)
+            painter.drawRoundedRect(r.adjusted(2, 2, -2, -2), 4, 4)
+        # 파일명은 비표시
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        size = int(self._get_size())
+        return QSize(size + 24, size + 28)
+
+
+class FilmstripView(QListView):
+    currentIndexChanged = pyqtSignal(int)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._size_idx = len(THUMB_STEPS) - 1  # 기본 280px
+        self._cache = ThumbCache(quality=85)
+        self._pool = QThreadPool.globalInstance()
+        self._model = FilmstripModel(self._cache, self._pool, self._target_size, self._current_dpr)
+        self._delegate = FilmstripDelegate(self._target_size, self)
+        self.setModel(self._model)
+        self.setItemDelegate(self._delegate)
+
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setFlow(QListView.Flow.LeftToRight)
+        self.setMovement(QListView.Movement.Static)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setWrapping(False)
+        self.setSpacing(6)
+        self.setUniformItemSizes(True)
+        self.setSelectionMode(QListView.SelectionMode.SingleSelection)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.setStyleSheet("QListView { background: #1F1F1F; }")
+
+        try:
+            self.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        except Exception:
+            pass
+
+        self._update_fixed_height()
+
+        # 접근성: 포커스 가능 및 스크린리더 라벨
+        try:
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            self.setAccessibleName("필름 스트립")
+            self.setAccessibleDescription("현재 폴더의 이미지 썸네일을 가로로 나열합니다.")
+        except Exception:
+            pass
+
+        # 내부 선택 변경 신호 억제 가드 (프로그램적 갱신 루프 방지)
+        self._suppress_signal = False
+
+    def _target_size(self) -> int:
+        return THUMB_STEPS[self._size_idx]
+
+    def _current_dpr(self) -> float:
+        try:
+            return float(self.viewport().devicePixelRatioF())
+        except Exception:
+            return 1.0
+
+    def _update_fixed_height(self):
+        h = self._target_size() + 28 + 4
+        self.setFixedHeight(h)
+
+    def set_items(self, paths: List[str], current_index: int = -1):
+        self._model.set_items(paths, current_index)
+        try:
+            if 0 <= current_index < self._model.rowCount():
+                self._suppress_signal = True
+                try:
+                    self.setCurrentIndex(self._model.index(current_index, 0))
+                    self.scrollTo(self.currentIndex(), QListView.ScrollHint.PositionAtCenter)
+                finally:
+                    self._suppress_signal = False
+        except Exception:
+            pass
+        # 현재 인덱스 주변(±50)만 메타/썸네일 미스시 빠르게 보완되도록 뷰를 강제 업데이트
+        try:
+            self.viewport().update()
+        except Exception:
+            pass
+
+    def set_current_index(self, row: int):
+        if 0 <= row < self._model.rowCount():
+            self._suppress_signal = True
+            try:
+                self.setCurrentIndex(self._model.index(row, 0))
+                self.scrollTo(self.currentIndex(), QListView.ScrollHint.PositionAtCenter)
+            finally:
+                self._suppress_signal = False
+
+    def _on_selection_changed(self, selected, deselected):
+        if self._suppress_signal:
+            return
+        idx = self.currentIndex()
+        if idx.isValid():
+            self.currentIndexChanged.emit(idx.row())
+
+    def wheelEvent(self, event):
+        mods = QApplication.keyboardModifiers()
+        dy = event.angleDelta().y()
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            if dy > 0:
+                self._size_idx = min(self._size_idx + 1, len(THUMB_STEPS) - 1)
+            elif dy < 0:
+                self._size_idx = max(self._size_idx - 1, 0)
+            self._update_fixed_height()
+            self.viewport().update()
+            event.accept()
+            return
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            try:
+                self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - dy * 2)
+            except Exception:
+                pass
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def keyPressEvent(self, event):
+        # Alt+숫자: 평점(델리게이트/모델 확장 여지 보장)
+        try:
+            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                key = event.key()
+                if Qt.Key.Key_0 <= key <= Qt.Key.Key_5:
+                    # TODO: rating 적용 지점(메타 저장소와 연계 시 구현)
+                    event.accept()
+                    return
+        except Exception:
+            pass
+        super().keyPressEvent(event)
+
+

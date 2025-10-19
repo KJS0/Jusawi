@@ -62,36 +62,73 @@ def load_image_util(file_path, image_display_area):
 def scan_directory_util(dir_path, current_image_path):
     image_files_in_dir = []
     current_image_index = -1
-    
-    normalized_current_path = None
-    if current_image_path:
-        normalized_current_path = os.path.normcase(current_image_path)
+
+    normalized_current_path = os.path.normcase(current_image_path) if current_image_path else None
 
     try:
         raw_files = os.listdir(dir_path)
-        if strcmplogicalw_func:  # Windows 정렬 사용 가능 시
+        # 1차: 파일명 정렬(Windows 논리 정렬 우선)
+        if strcmplogicalw_func:
             sorted_filenames = sorted(raw_files, key=functools.cmp_to_key(windows_style_sort_key))
-        else:  # 그 외의 경우 기본 정렬
+        else:
             sorted_filenames = sorted(raw_files)
-        
-        temp_file_list = []
+
+        # 후보 파일 수집
+        temp_files = []
         for fname in sorted_filenames:
             if os.path.splitext(fname.lower())[1] in SUPPORTED_FORMATS:
-                full_path = os.path.join(dir_path, fname)
-                temp_file_list.append(full_path)
-                if normalized_current_path and os.path.normcase(full_path) == normalized_current_path:
-                    current_image_index = len(temp_file_list) - 1
-        
-        image_files_in_dir = temp_file_list
+                full = os.path.join(dir_path, fname)
+                temp_files.append(full)
+
+        # 2차: 정렬 키 계산 (Exif DateTimeOriginal -> mtime -> name)
+        def _sort_key(p: str):
+            try:
+                st = os.stat(p)
+                mtime = float(st.st_mtime)
+            except Exception:
+                mtime = 0.0
+            exif_ts = None
+            try:
+                # Pillow 기반 초경량 EXIF 추출 (실패 시 None)
+                from ..services.exif_utils import extract_with_pillow  # type: ignore
+                meta = extract_with_pillow(p) or {}
+                dt = meta.get("DateTimeOriginal") or meta.get("DateTime")
+                if isinstance(dt, str) and len(dt) >= 19 and dt[4] == ":":
+                    y, mo, d = int(dt[0:4]), int(dt[5:7]), int(dt[8:10])
+                    hh, mm, ss = int(dt[11:13]), int(dt[14:16]), int(dt[17:19])
+                    import datetime
+                    exif_ts = datetime.datetime(y, mo, d, hh, mm, ss).timestamp()
+            except Exception:
+                exif_ts = None
+            # 오름차순: 오래된 것 먼저
+            return (
+                exif_ts if exif_ts is not None else float("inf"),
+                mtime if exif_ts is None else 0.0,
+                os.path.basename(p).lower(),
+            )
+
+        try:
+            temp_files.sort(key=_sort_key)
+        except Exception:
+            # EXIF 정렬 실패 시 파일명 정렬로 폴백
+            temp_files.sort(key=lambda p: os.path.basename(p).lower())
+
+        image_files_in_dir = temp_files
+
+        if normalized_current_path:
+            for i, full in enumerate(image_files_in_dir):
+                if os.path.normcase(full) == normalized_current_path:
+                    current_image_index = i
+                    break
 
         if current_image_index == -1 and current_image_path and image_files_in_dir:
             log.warning("scan_dir_missing_current | current=%s", os.path.basename(current_image_path))
 
     except OSError as e:
         log.error("scan_dir_os_error | dir=%s | err=%s", os.path.basename(dir_path or ""), str(e))
-        return [], -1 
-    
-    return image_files_in_dir, current_image_index 
+        return [], -1
+
+    return image_files_in_dir, current_image_index
 
 
 # ----- 안전 저장 유틸 -----

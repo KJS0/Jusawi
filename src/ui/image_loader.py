@@ -72,7 +72,24 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
     viewer.current_image_path = path
     viewer.update_window_title(path)
     if os.path.exists(path):
-        viewer.scan_directory(os.path.dirname(path))
+        try:
+            dirp = os.path.dirname(path)
+            # 같은 폴더이고 목록에 이미 포함되어 있으면 재스캔 생략
+            already_listed = False
+            try:
+                nc = os.path.normcase
+                if viewer.image_files_in_dir:
+                    listed_set = {nc(p) for p in viewer.image_files_in_dir}
+                    already_listed = nc(path) in listed_set and nc(getattr(viewer, "_last_scanned_dir", "")) == nc(dirp)
+            except Exception:
+                already_listed = False
+            if not already_listed:
+                viewer.scan_directory(dirp)
+        except Exception:
+            try:
+                viewer.scan_directory(os.path.dirname(path))
+            except Exception:
+                pass
     viewer.update_button_states()
     viewer.update_status_left()
     viewer.update_status_right()
@@ -81,6 +98,13 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
     viewer._tf_flip_v = False
     viewer._apply_transform_to_view()
     viewer._mark_dirty(False)
+    # 필름 스트립 선택 동기화(내비게이션 등으로 변경 시 표시 반영)
+    try:
+        if hasattr(viewer, "filmstrip") and viewer.filmstrip is not None:
+            if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
+                viewer.filmstrip.set_current_index(viewer.current_image_index)
+    except Exception:
+        pass
     # 정보 패널 갱신(보일 때만)
     try:
         if hasattr(viewer, "update_info_panel") and getattr(viewer, "info_text", None) is not None:

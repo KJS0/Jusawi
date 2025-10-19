@@ -5,6 +5,7 @@ from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent, QUrl  # type: i
 from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap, QMovie, QColorSpace, QDesktopServices  # type: ignore[import]
 
 from .image_view import ImageView
+from .filmstrip import FilmstripView
 from . import commands as viewer_cmd
 from . import animation_controller as anim
 from .state import TransformState, ViewerState
@@ -175,6 +176,14 @@ class JusawiViewer(QMainWindow):
         self.info_panel.setVisible(False)
         self.content_layout.addWidget(self.info_panel)
         self.main_layout.addWidget(self.content_widget, 1)
+
+        # 하단 필름 스트립
+        self.filmstrip = FilmstripView(self)
+        try:
+            self.filmstrip.currentIndexChanged.connect(self._on_filmstrip_index_changed)
+        except Exception:
+            pass
+        self.main_layout.addWidget(self.filmstrip, 0)
 
         # 이미지 서비스
         self.image_service = ImageService(self)
@@ -955,6 +964,10 @@ class JusawiViewer(QMainWindow):
             self.log.info("scan_dir_start | dir=%s", os.path.basename(dir_path or ""))
         except Exception:
             pass
+        try:
+            self._last_scanned_dir = dir_path or ""
+        except Exception:
+            pass
         self.image_files_in_dir, self.current_image_index = self.image_service.scan_directory(dir_path, self.current_image_path)
         try:
             if (self.current_image_index is None or self.current_image_index < 0) and self.image_files_in_dir:
@@ -969,6 +982,13 @@ class JusawiViewer(QMainWindow):
         except Exception:
             pass
         # 자연어 검색/인덱싱 관련 로직 제거됨
+        # 필름 스트립 갱신
+        try:
+            cur = int(self.current_image_index) if self.current_image_index is not None else -1
+            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                self.filmstrip.set_items(self.image_files_in_dir or [], cur)
+        except Exception:
+            pass
         # 디렉터리 변경/정렬 이후에도 현재 표시가 썸네일이면 원본 업그레이드를 예약
         try:
             if self.load_successful and self.current_image_path and not self._is_current_file_animation():
@@ -1001,6 +1021,22 @@ class JusawiViewer(QMainWindow):
             self._nav.show_next_image()
         else:
             nav_show_next_image(self)
+
+    def _on_filmstrip_index_changed(self, row: int):
+        try:
+            if 0 <= row < len(self.image_files_in_dir):
+                # 동일 인덱스면 재로딩 방지
+                if int(self.current_image_index) == int(row):
+                    return
+                self.current_image_index = row
+                self.load_image_at_current_index()
+                try:
+                    # 자동 스크롤(중앙 정렬)
+                    self.filmstrip.set_current_index(row)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def load_image_at_current_index(self):
         if getattr(self, "_nav", None):
