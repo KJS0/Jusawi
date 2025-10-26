@@ -161,6 +161,7 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
             pass
     except Exception:
         pass
+    # 보기 공유 옵션 제거됨
     viewer._mark_dirty(False)
     # 별점/플래그 표시 갱신(최초 로드시에도 즉시 반영)
     try:

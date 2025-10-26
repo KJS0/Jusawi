@@ -190,6 +190,15 @@ class ImageView(QGraphicsView):
             return
         vp_w = max(1.0, float(vp.width()))
         vp_h = max(1.0, float(vp.height()))
+        # 화면 맞춤 여백(%) 적용: 뷰어 설정에서 읽기
+        try:
+            margin_pct = float(getattr(self.window(), "_fit_margin_pct", 0.0) or 0.0)
+        except Exception:
+            margin_pct = 0.0
+        if margin_pct > 0:
+            m = max(0.0, min(40.0, margin_pct)) / 100.0
+            vp_w = max(1.0, vp_w * (1.0 - m * 2.0))
+            vp_h = max(1.0, vp_h * (1.0 - m * 2.0))
         s_w = vp_w / float(br.width())
         s_h = vp_h / float(br.height())
         desired = min(s_w, s_h)
@@ -226,6 +235,13 @@ class ImageView(QGraphicsView):
         if img_w <= 0:
             return
         vp_w = max(1.0, float(self.viewport().width()))
+        try:
+            margin_pct = float(getattr(self.window(), "_fit_margin_pct", 0.0) or 0.0)
+        except Exception:
+            margin_pct = 0.0
+        if margin_pct > 0:
+            m = max(0.0, min(40.0, margin_pct)) / 100.0
+            vp_w = max(1.0, vp_w * (1.0 - m * 2.0))
         desired = vp_w / float(img_w)
         try:
             src_scale = float(getattr(self, '_source_scale', 1.0) or 1.0)
@@ -259,6 +275,13 @@ class ImageView(QGraphicsView):
         if img_h <= 0:
             return
         vp_h = max(1.0, float(self.viewport().height()))
+        try:
+            margin_pct = float(getattr(self.window(), "_fit_margin_pct", 0.0) or 0.0)
+        except Exception:
+            margin_pct = 0.0
+        if margin_pct > 0:
+            m = max(0.0, min(40.0, margin_pct)) / 100.0
+            vp_h = max(1.0, vp_h * (1.0 - m * 2.0))
         desired = vp_h / float(img_h)
         try:
             src_scale = float(getattr(self, '_source_scale', 1.0) or 1.0)
@@ -316,8 +339,14 @@ class ImageView(QGraphicsView):
         self.set_absolute_scale(self._current_scale * factor)
 
     def _dynamic_step(self) -> float:
+        # 고정 단계 설정이 있으면 우선 사용
+        try:
+            if bool(getattr(self.window(), "_use_fixed_zoom_steps", False)):
+                f = float(getattr(self.window(), "_zoom_step_factor", 1.25) or 1.25)
+                return max(1.05, min(2.5, f))
+        except Exception:
+            pass
         s = self._current_scale
-        # 낮은 배율에서 크게, 높은 배율에서 작게 변화
         if s < 0.05:
             base = 1.8
         elif s < 0.1:
@@ -339,9 +368,18 @@ class ImageView(QGraphicsView):
         return base
 
     def _dynamic_step_with_precision(self, precise: bool) -> float:
+        # 고정 단계 설정이 있으면 우선 사용
+        try:
+            if bool(getattr(self.window(), "_use_fixed_zoom_steps", False)):
+                if precise:
+                    pf = float(getattr(self.window(), "_precise_zoom_step_factor", 1.1) or 1.1)
+                    return max(1.02, min(1.8, pf))
+                f = float(getattr(self.window(), "_zoom_step_factor", 1.25) or 1.25)
+                return max(1.05, min(2.5, f))
+        except Exception:
+            pass
         base = self._dynamic_step()
         if precise:
-            # 정밀 확대: 증분을 줄여 더 미세하게
             return 1.0 + (base - 1.0) * 0.4
         return base
 
@@ -428,35 +466,137 @@ class ImageView(QGraphicsView):
             return super().wheelEvent(event)
         mods = event.modifiers()
         ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
-        if ctrl:
-            # Ctrl 포함이면 항상 줌
+        alt = bool(mods & Qt.KeyboardModifier.AltModifier)
+        # 설정값에 따른 휠 줌 정책
+        try:
+            requires_ctrl = bool(getattr(self.window(), "_wheel_zoom_requires_ctrl", True))
+        except Exception:
+            requires_ctrl = True
+        try:
+            alt_precise = bool(getattr(self.window(), "_wheel_zoom_alt_precise", True))
+        except Exception:
+            alt_precise = True
+        allow_alt = (alt and alt_precise)
+        allow_plain = (not requires_ctrl and not ctrl and not alt)
+        # 휠 델타: 일부 환경에서 x/y가 0이 되는 문제를 폴백 처리
+        dy = event.angleDelta().y()
+        if dy == 0:
+            try:
+                dy = event.angleDelta().x()
+            except Exception:
+                dy = 0
+        if ctrl or allow_alt or allow_plain:
             self._view_mode = 'free'
-            base = self._dynamic_step()
-            if event.angleDelta().y() > 0:
+            base = self._dynamic_step_with_precision(precise=(alt and not ctrl))
+            if dy > 0:
                 self.zoom_step(base)
             else:
                 self.zoom_step(1.0 / base)
             # emit cursor pos after zoom at current cursor
             self._emit_cursor_pos_at_viewport_point(event.position())
+            # 전체화면 오버레이(툴바/필름스트립) 위치 재배치(표시 상태는 변경하지 않음)
+            try:
+                win = self.window()
+                if hasattr(win, "_position_fullscreen_overlays"):
+                    win._position_fullscreen_overlays()
+                # 전체화면에서 줌 중 즉시 숨김 유지
+                if getattr(win, "is_fullscreen", False):
+                    try:
+                        win._apply_ui_chrome_visibility(False, temporary=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             event.accept()
             return
-        # Ctrl 미포함은 기본 스크롤 동작에 위임
-        return super().wheelEvent(event)
+        # Ctrl/Alt 미포함: 트랙패드 두 손가락 스크롤로 대각선 팬 지원
+        try:
+            sbx = self.horizontalScrollBar()
+            sby = self.verticalScrollBar()
+            dx2 = int(event.angleDelta().x())
+            dy2 = int(event.angleDelta().y())
+            if sbx is not None and dx2:
+                try:
+                    sbx.setValue(sbx.value() - dx2)
+                except Exception:
+                    pass
+            if sby is not None and dy2:
+                try:
+                    sby.setValue(sby.value() - dy2)
+                except Exception:
+                    pass
+            # 전체화면에서는 팬 중 즉시 숨김 유지
+            try:
+                win = self.window()
+                if getattr(win, "is_fullscreen", False):
+                    try:
+                        win._apply_ui_chrome_visibility(False, temporary=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            event.accept()
+            return
+        except Exception:
+            return super().wheelEvent(event)
 
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         # 드래그 중/후에도 화살표 커서 유지
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        # 팬 상태 시작 플래그 및 전체화면 시 즉시 숨김
+        try:
+            if event.button() == Qt.MouseButton.LeftButton:
+                win = self.window()
+                setattr(win, "_is_user_panning", True)
+                if getattr(win, "is_fullscreen", False):
+                    try:
+                        win._apply_ui_chrome_visibility(False, temporary=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def mouseMoveEvent(self, event):
         if self._pix_item:
             self._emit_cursor_pos_at_viewport_point(event.position())
         super().mouseMoveEvent(event)
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        # 드래그/팬 중 오버레이 위치 재배치
+        try:
+            win = self.window()
+            if hasattr(win, "_position_fullscreen_overlays"):
+                win._position_fullscreen_overlays()
+            # 팬 중 플래그 유지 및 전체화면 시 숨김 유지
+            try:
+                if int(event.buttons()) & int(Qt.MouseButton.LeftButton):
+                    setattr(win, "_is_user_panning", True)
+                    if getattr(win, "is_fullscreen", False):
+                        try:
+                            win._apply_ui_chrome_visibility(False, temporary=True)
+                        except Exception:
+                            pass
+                else:
+                    setattr(win, "_is_user_panning", False)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        # 릴리즈 시에도 한 번 더 고정 위치 재확인
+        try:
+            win = self.window()
+            if hasattr(win, "_position_fullscreen_overlays"):
+                win._position_fullscreen_overlays()
+            try:
+                setattr(win, "_is_user_panning", False)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def resizeEvent(self, event):
         # fit 계열이면 항상 재-맞춤하여 화면 맞춤에서 벗어나지 않게 함
@@ -495,12 +635,23 @@ class ImageView(QGraphicsView):
             pass
 
     def mouseDoubleClickEvent(self, event):
-        # 더블클릭: 화면 맞춤 ↔ 실제 크기 토글
-        if self._view_mode == 'actual':
+        # 더블클릭 동작 커스터마이즈
+        action = str(getattr(self.window(), "_double_click_action", "toggle") or "toggle")
+        if action == 'toggle':
+            if self._view_mode == 'actual':
+                self.fit_to_window()
+            else:
+                self.reset_to_100()
+        elif action == 'fit':
             self.fit_to_window()
-        else:
+        elif action == 'fit_width':
+            self.fit_to_width()
+        elif action == 'fit_height':
+            self.fit_to_height()
+        elif action == 'actual':
             self.reset_to_100()
-        super().mouseDoubleClickEvent(event) 
+        # 'none' 은 아무 것도 하지 않음
+        super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event):
         # 방향키/페이지/Home/End로 뷰가 스크롤되지 않도록 소비

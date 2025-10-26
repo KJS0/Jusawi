@@ -33,21 +33,20 @@ COMMANDS: List[Command] = [
     Command("show_first_image", "첫 이미지", "첫 파일로 이동", "탐색", "show_first_image", ["Home"]),
     Command("show_last_image", "마지막 이미지", "마지막 파일로 이동", "탐색", "show_last_image", ["End"]),
 
-    Command("fit_to_window", "화면 맞춤", "화면에 맞게 보기", "보기", "fit_to_window", ["F"]),
-    Command("fit_to_width", "가로 맞춤", "너비에 맞게 보기", "보기", "fit_to_width", ["W"]),
-    Command("fit_to_height", "세로 맞춤", "높이에 맞게 보기", "보기", "fit_to_height", ["H"]),
-    # 실제 크기(100%) 단축키 제거(숫자 키는 평점에 사용)
-    Command("reset_to_100", "실제 크기(100%)", "배율 100%", "보기", "reset_to_100", []),
-    # Ctrl+Plus/Ctrl+Equal 모두 허용(키보드 레이아웃에 따라 + 입력이 Shift+='가 될 수 있음)
-    Command("zoom_in", "확대", "점진 확대", "보기", "zoom_in", ["Ctrl++", "Ctrl+="]),
-    Command("zoom_out", "축소", "점진 축소", "보기", "zoom_out", ["Ctrl+-"]),
+    Command("fit_to_window", "화면 맞춤", "화면에 맞게 보기", "보기", "fit_to_window", ["Ctrl+0"]),
+    Command("fit_to_width", "가로 맞춤", "너비에 맞게 보기", "보기", "fit_to_width", ["Ctrl+2"]),
+    Command("fit_to_height", "세로 맞춤", "높이에 맞게 보기", "보기", "fit_to_height", ["Ctrl+3"]),
+    Command("reset_to_100", "실제 크기(100%)", "배율 100%", "보기", "reset_to_100", ["Ctrl+1"]),
+    # Ctrl+Plus/Ctrl+Equal 모두 허용 + 단일 키(=/-)도 허용
+    Command("zoom_in", "확대", "점진 확대", "보기", "zoom_in", ["=", "Ctrl++", "Ctrl+="]),
+    Command("zoom_out", "축소", "점진 축소", "보기", "zoom_out", ["-", "Ctrl+-", "Ctrl+Minus", "Ctrl+Subtract"]),
 
     # 회전은 기본 미할당(버튼만). 원하면 사용자가 매핑
-    Command("rotate_ccw_90", "왼쪽 90° 회전", "반시계 방향 회전", "편집", "rotate_ccw_90", ["Q"]),
-    Command("rotate_cw_90", "오른쪽 90° 회전", "시계 방향 회전", "편집", "rotate_cw_90", ["E"]),
-    Command("rotate_180", "180° 회전", "180도 회전", "편집", "rotate_180", ["R"]),
-    Command("flip_horizontal", "좌우 뒤집기", "수평 반전", "편집", "flip_horizontal", ["Shift+H"]),
-    Command("flip_vertical", "상하 뒤집기", "수직 반전", "편집", "flip_vertical", ["Shift+V"]),
+    Command("rotate_ccw_90", "왼쪽 90° 회전", "반시계 방향 회전", "편집", "rotate_ccw_90", ["E"]),
+    Command("rotate_cw_90", "오른쪽 90° 회전", "시계 방향 회전", "편집", "rotate_cw_90", []),
+    Command("rotate_180", "180° 회전", "180도 회전", "편집", "rotate_180", ["Ctrl+Alt+R"]),
+    Command("flip_horizontal", "좌우 뒤집기", "수평 반전", "편집", "flip_horizontal", ["Ctrl+Alt+H"]),
+    Command("flip_vertical", "상하 뒤집기", "수직 반전", "편집", "flip_vertical", ["Ctrl+Alt+V"]),
 
     # 편집 히스토리 제거됨
 
@@ -95,14 +94,22 @@ def get_effective_keymap(settings) -> Dict[str, List[str]]:
     custom = _load_custom_keymap(settings)
     eff: Dict[str, List[str]] = {}
     for cmd in COMMANDS:
+        # 고정키는 기본값 고정
         if cmd.lock_key:
             eff[cmd.id] = cmd.default_keys[:]
             continue
-        if cmd.id in custom and custom[cmd.id]:
-            # 사용자 정의가 있으면 그것만 사용(기본값과 병합하지 않음)
-            eff[cmd.id] = [str(k).strip() for k in custom[cmd.id] if str(k).strip()]
-        else:
-            eff[cmd.id] = cmd.default_keys[:]
+        # 사용자 지정과 기본값을 병합(사용자 지정 우선, 중복 제거)
+        merged: List[str] = []
+        for src in (custom.get(cmd.id, []) or []) + (cmd.default_keys or []):
+            s = str(src).strip()
+            if not s:
+                continue
+            # Space는 애니메이션 전용으로 예약, 다른 명령에서는 제외
+            if s.lower() == "space" and cmd.id != "toggle_animation":
+                continue
+            if s not in merged:
+                merged.append(s)
+        eff[cmd.id] = merged
     return eff
 
 

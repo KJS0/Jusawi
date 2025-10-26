@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox,
-    QDialogButtonBox, QCheckBox, QWidget, QTabWidget, QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QApplication, QFormLayout, QFileDialog
+    QDialogButtonBox, QCheckBox, QWidget, QTabWidget, QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QApplication, QFormLayout, QFileDialog, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QKeySequence
@@ -89,11 +89,61 @@ class SettingsDialog(QDialog):
         tiff_row.addStretch(1)
         gen_layout.addLayout(tiff_row)
 
-        # ----- 단축키 탭 -----
-        self.keys_tab = QWidget(self)
-        self.tabs.addTab(self.keys_tab, "단축키")
+        # 단축키 탭 제거
         self._keys_ready = False
 
+        # ----- 보기 탭 -----
+        self.view_tab = QWidget(self)
+        self.tabs.addTab(self.view_tab, "보기")
+        view_layout = QVBoxLayout(self.view_tab)
+        try:
+            view_layout.setContentsMargins(8, 8, 8, 8)
+            view_layout.setSpacing(8)
+        except Exception:
+            pass
+        form_view = QFormLayout()
+        # 기본 보기 모드
+        self.combo_default_view = QComboBox(self.view_tab)
+        self.combo_default_view.addItems(["화면 맞춤", "가로 맞춤", "세로 맞춤", "실제 크기"])  # fit/fit_width/fit_height/actual
+        # 이미지 전환 시 처리 -> 기존 일반 탭의 combo_zoom_policy 사용(중복 방지)
+        # 보기 공유 옵션 제거
+        # 최소/최대 확대 비율(% 단위)
+        from PyQt6.QtWidgets import QSpinBox as _IntSpin
+        self.spin_min_scale = _IntSpin(self.view_tab); self.spin_min_scale.setRange(1, 1600); self.spin_min_scale.setSuffix(" %")
+        self.spin_max_scale = _IntSpin(self.view_tab); self.spin_max_scale.setRange(1, 6400); self.spin_max_scale.setSuffix(" %")
+        # 줌 단계
+        self.chk_fixed_steps = QCheckBox("고정 줌 단계 사용", self.view_tab)
+        self.spin_zoom_step = QDoubleSpinBox(self.view_tab); self.spin_zoom_step.setRange(1.02, 2.5); self.spin_zoom_step.setSingleStep(0.01)
+        self.spin_precise_step = QDoubleSpinBox(self.view_tab); self.spin_precise_step.setRange(1.01, 2.0); self.spin_precise_step.setSingleStep(0.01)
+        # 리샘플링 품질/보간
+        self.chk_smooth = QCheckBox("고품질 보간(스무딩)", self.view_tab)
+        # 화면 맞춤 여백
+        self.spin_fit_margin = QSpinBox(self.view_tab); self.spin_fit_margin.setRange(0, 40); self.spin_fit_margin.setSuffix(" %")
+        # 휠/트랙패드 제스처
+        self.chk_wheel_requires_ctrl = QCheckBox("휠 줌에 Ctrl 필요", self.view_tab)
+        self.chk_alt_precise = QCheckBox("Alt+휠 정밀 줌 허용", self.view_tab)
+        # 더블클릭/휠클릭 동작
+        self.combo_dbl = QComboBox(self.view_tab); self.combo_dbl.addItems(["토글(화면↔100%)", "화면 맞춤", "가로 맞춤", "세로 맞춤", "실제 크기", "없음"])  # toggle/fit/fit_width/fit_height/actual/none
+        self.combo_mid = QComboBox(self.view_tab); self.combo_mid.addItems(["없음", "토글(화면↔100%)", "화면 맞춤", "실제 크기"])  # none/toggle/fit/actual
+        # 회전/반전 시 재맞춤 여부
+        self.chk_refit_on_tf = QCheckBox("회전/반전 후 자동 재맞춤", self.view_tab)
+        # DPR 옵션
+        self.chk_preserve_visual_dpr = QCheckBox("DPR 변경 시 시각 크기 유지", self.view_tab)
+        form_view.addRow("기본 보기 모드", self.combo_default_view)
+        form_view.addRow("최소 확대 비율", self.spin_min_scale)
+        form_view.addRow("최대 확대 비율", self.spin_max_scale)
+        form_view.addRow("고정 줌 단계", self.chk_fixed_steps)
+        form_view.addRow("줌 단계", self.spin_zoom_step)
+        form_view.addRow("미세 줌 단계", self.spin_precise_step)
+        form_view.addRow("고품질 보간", self.chk_smooth)
+        form_view.addRow("화면 맞춤 여백", self.spin_fit_margin)
+        form_view.addRow("휠 Ctrl 필요", self.chk_wheel_requires_ctrl)
+        form_view.addRow("Alt 정밀 줌", self.chk_alt_precise)
+        form_view.addRow("더블클릭 동작", self.combo_dbl)
+        form_view.addRow("휠클릭 동작", self.combo_mid)
+        form_view.addRow("회전/반전 재맞춤", self.chk_refit_on_tf)
+        form_view.addRow("DPR 시각 크기 유지", self.chk_preserve_visual_dpr)
+        view_layout.addLayout(form_view)
         # ----- 전체화면/오버레이 탭 -----
         self.fullscreen_tab = QWidget(self)
         self.tabs.addTab(self.fullscreen_tab, "전체화면")
@@ -265,6 +315,60 @@ class SettingsDialog(QDialog):
             self.chk_overlay_default.setChecked(bool(getattr(viewer, "_overlay_enabled_default", False)))
         except Exception:
             self.chk_overlay_default.setChecked(False)
+        # 보기 탭 로드
+        try:
+            dvm = str(getattr(viewer, "_default_view_mode", 'fit'))
+            self.combo_default_view.setCurrentIndex({"fit":0, "fit_width":1, "fit_height":2, "actual":3}.get(dvm, 0))
+        except Exception:
+            self.combo_default_view.setCurrentIndex(0)
+        try:
+            self.spin_min_scale.setValue(int(round(float(getattr(viewer, "min_scale", 0.01)) * 100)))
+            self.spin_max_scale.setValue(int(round(float(getattr(viewer, "max_scale", 16.0)) * 100)))
+        except Exception:
+            self.spin_min_scale.setValue(1); self.spin_max_scale.setValue(1600)
+        try:
+            self.chk_fixed_steps.setChecked(bool(getattr(viewer, "_use_fixed_zoom_steps", False)))
+        except Exception:
+            self.chk_fixed_steps.setChecked(False)
+        try:
+            self.spin_zoom_step.setValue(float(getattr(viewer, "_zoom_step_factor", 1.25)))
+            self.spin_precise_step.setValue(float(getattr(viewer, "_precise_zoom_step_factor", 1.1)))
+        except Exception:
+            self.spin_zoom_step.setValue(1.25); self.spin_precise_step.setValue(1.1)
+        try:
+            self.chk_smooth.setChecked(bool(getattr(viewer, "_smooth_transform", True)))
+        except Exception:
+            self.chk_smooth.setChecked(True)
+        try:
+            self.spin_fit_margin.setValue(int(getattr(viewer, "_fit_margin_pct", 0)))
+        except Exception:
+            self.spin_fit_margin.setValue(0)
+        try:
+            self.chk_wheel_requires_ctrl.setChecked(bool(getattr(viewer, "_wheel_zoom_requires_ctrl", True)))
+        except Exception:
+            self.chk_wheel_requires_ctrl.setChecked(True)
+        try:
+            self.chk_alt_precise.setChecked(bool(getattr(viewer, "_wheel_zoom_alt_precise", True)))
+        except Exception:
+            self.chk_alt_precise.setChecked(True)
+        try:
+            dbl = str(getattr(viewer, "_double_click_action", 'toggle'))
+            self.combo_dbl.setCurrentIndex({"toggle":0, "fit":1, "fit_width":2, "fit_height":3, "actual":4, "none":5}.get(dbl, 0))
+        except Exception:
+            self.combo_dbl.setCurrentIndex(0)
+        try:
+            mid = str(getattr(viewer, "_middle_click_action", 'none'))
+            self.combo_mid.setCurrentIndex({"none":0, "toggle":1, "fit":2, "actual":3}.get(mid, 0))
+        except Exception:
+            self.combo_mid.setCurrentIndex(0)
+        try:
+            self.chk_refit_on_tf.setChecked(bool(getattr(viewer, "_refit_on_transform", True)))
+        except Exception:
+            self.chk_refit_on_tf.setChecked(True)
+        try:
+            self.chk_preserve_visual_dpr.setChecked(bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
+        except Exception:
+            self.chk_preserve_visual_dpr.setChecked(False)
 
     # commit back to viewer (does not save)
     def apply_to_viewer(self, viewer):
@@ -364,6 +468,66 @@ class SettingsDialog(QDialog):
             pass
         try:
             viewer._overlay_enabled_default = bool(self.chk_overlay_default.isChecked())
+        except Exception:
+            pass
+        # 보기 탭 적용
+        try:
+            idx = int(self.combo_default_view.currentIndex())
+            viewer._default_view_mode = ("fit" if idx == 0 else ("fit_width" if idx == 1 else ("fit_height" if idx == 2 else "actual")))
+        except Exception:
+            pass
+        try:
+            viewer.min_scale = float(int(self.spin_min_scale.value())) / 100.0
+            viewer.max_scale = float(int(self.spin_max_scale.value())) / 100.0
+            if hasattr(viewer, 'image_display_area'):
+                viewer.image_display_area.set_min_max_scale(viewer.min_scale, viewer.max_scale)
+        except Exception:
+            pass
+        try:
+            viewer._use_fixed_zoom_steps = bool(self.chk_fixed_steps.isChecked())
+            viewer._zoom_step_factor = float(self.spin_zoom_step.value())
+            viewer._precise_zoom_step_factor = float(self.spin_precise_step.value())
+        except Exception:
+            pass
+        try:
+            viewer._smooth_transform = bool(self.chk_smooth.isChecked())
+            # 렌더 힌트 즉시 반영
+            if hasattr(viewer, 'image_display_area') and viewer.image_display_area is not None:
+                iv = viewer.image_display_area
+                from PyQt6.QtGui import QPainter
+                hints = iv.renderHints()
+                if viewer._smooth_transform:
+                    hints |= QPainter.RenderHint.SmoothPixmapTransform
+                else:
+                    hints &= ~QPainter.RenderHint.SmoothPixmapTransform
+                iv.setRenderHints(hints)
+        except Exception:
+            pass
+        try:
+            viewer._fit_margin_pct = int(self.spin_fit_margin.value())
+        except Exception:
+            pass
+        try:
+            viewer._wheel_zoom_requires_ctrl = bool(self.chk_wheel_requires_ctrl.isChecked())
+            viewer._wheel_zoom_alt_precise = bool(self.chk_alt_precise.isChecked())
+        except Exception:
+            pass
+        try:
+            di = int(self.combo_dbl.currentIndex())
+            viewer._double_click_action = ("toggle" if di == 0 else ("fit" if di == 1 else ("fit_width" if di == 2 else ("fit_height" if di == 3 else ("actual" if di == 4 else "none")))))
+        except Exception:
+            pass
+        try:
+            mi = int(self.combo_mid.currentIndex())
+            viewer._middle_click_action = ("none" if mi == 0 else ("toggle" if mi == 1 else ("fit" if mi == 2 else "actual")))
+        except Exception:
+            pass
+        try:
+            viewer._refit_on_transform = bool(self.chk_refit_on_tf.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._preserve_visual_size_on_dpr_change = bool(self.chk_preserve_visual_dpr.isChecked())
         except Exception:
             pass
         # 파일 관련 설정 변경 시, 캐시/썸네일까지 리셋 후 현재 폴더를 새로운 기준으로 재스캔(현재 파일은 유지)

@@ -241,3 +241,69 @@ def save_current_image_as(viewer: "JusawiViewer") -> bool:
         return False
 
 
+
+def reload_current_image(viewer: "JusawiViewer") -> None:
+    try:
+        path = viewer.current_image_path or ""
+        if not path or not os.path.isfile(path):
+            try:
+                viewer.statusBar().showMessage("다시 읽을 이미지가 없습니다.", 2000)
+            except Exception:
+                pass
+            return
+        # 파일만 다시 로드 + 폴더 재스캔(리셋)
+        try:
+            # 모든 캐시를 초기화하여 처음 로드처럼 동작
+            try:
+                viewer.image_service.clear_all_caches()
+            except Exception:
+                pass
+            viewer.image_service.invalidate_path(path)
+        except Exception:
+            pass
+        # 폴더 재스캔: 현재 파일이 속한 디렉터리 기준
+        try:
+            dirp = os.path.dirname(path)
+            if dirp and os.path.isdir(dirp):
+                try:
+                    # 썸네일 메모리 캐시도 초기화
+                    viewer._clear_filmstrip_cache()
+                except Exception:
+                    pass
+                # 인덱스 보존을 위해 현재 파일 경로를 기준으로 재스캔 후 현재 인덱스 복원
+                viewer.scan_directory(dirp)
+                try:
+                    nc = os.path.normcase
+                    if viewer.image_files_in_dir:
+                        idx = [nc(p) for p in viewer.image_files_in_dir].index(nc(path))
+                        viewer.current_image_index = idx
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        viewer.load_image(path, source='reload')
+    except Exception:
+        pass
+
+
+def open_folder(viewer: "JusawiViewer") -> None:
+    try:
+        from PyQt6.QtWidgets import QFileDialog  # type: ignore[import]
+        start_dir = getattr(viewer, "last_open_dir", "") if (viewer.last_open_dir and os.path.isdir(viewer.last_open_dir)) else ""
+        dir_path = QFileDialog.getExistingDirectory(viewer, "폴더 선택", start_dir)
+    except Exception:
+        dir_path = ""
+    if not dir_path:
+        return
+    viewer.scan_directory(dir_path)
+    if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
+        viewer.load_image(viewer.image_files_in_dir[viewer.current_image_index], source='open_folder')
+    else:
+        viewer.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
+    try:
+        if os.path.isdir(dir_path):
+            if bool(getattr(viewer, "_remember_last_open_dir", True)):
+                viewer.last_open_dir = dir_path
+            viewer.save_settings()
+    except Exception:
+        pass

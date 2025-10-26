@@ -74,7 +74,7 @@ def rotate_cw_90(viewer: "JusawiViewer") -> None:
     viewer._tf_rotation = (viewer._tf_rotation + 90) % 360
     viewer._apply_transform_to_view()
     viewer._mark_dirty(True)
-    if getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+    if bool(getattr(viewer, "_refit_on_transform", True)) and getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
         viewer.image_display_area.apply_current_view_mode()
 
 
@@ -85,7 +85,7 @@ def rotate_ccw_90(viewer: "JusawiViewer") -> None:
     viewer._tf_rotation = (viewer._tf_rotation - 90) % 360
     viewer._apply_transform_to_view()
     viewer._mark_dirty(True)
-    if getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+    if bool(getattr(viewer, "_refit_on_transform", True)) and getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
         viewer.image_display_area.apply_current_view_mode()
 
 
@@ -96,7 +96,7 @@ def rotate_180(viewer: "JusawiViewer") -> None:
     viewer._tf_rotation = (viewer._tf_rotation + 180) % 360
     viewer._apply_transform_to_view()
     viewer._mark_dirty(True)
-    if getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+    if bool(getattr(viewer, "_refit_on_transform", True)) and getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
         viewer.image_display_area.apply_current_view_mode()
 
 
@@ -107,7 +107,7 @@ def flip_horizontal(viewer: "JusawiViewer") -> None:
     viewer._tf_flip_h = not bool(viewer._tf_flip_h)
     viewer._apply_transform_to_view()
     viewer._mark_dirty(True)
-    if getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
+    if bool(getattr(viewer, "_refit_on_transform", True)) and getattr(viewer.image_display_area, "_view_mode", "fit") in ("fit", "fit_width", "fit_height"):
         viewer.image_display_area.apply_current_view_mode()
 
 

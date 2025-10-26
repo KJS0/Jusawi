@@ -146,6 +146,36 @@ def load_settings(viewer) -> None:
                         viewer.settings.remove("keys/custom/rotate_180")
                 except Exception:
                     pass
+                # 구 기본 매핑 제거: Q,E,W,H,Shift+H,Shift+V, F(화면맞춤), Ctrl+-을 잘못 저장한 확대, Q를 잘못 저장한 축소, Shift+H를 잘못 저장한 180°
+                for k in ("rotate_ccw_90", "rotate_cw_90", "fit_to_width", "fit_to_height", "flip_horizontal", "flip_vertical", "fit_to_window", "zoom_in", "zoom_out", "rotate_180"):
+                    try:
+                        raw = str(viewer.settings.value(f"keys/custom/{k}", ""))
+                    except Exception:
+                        raw = ""
+                    if not raw:
+                        continue
+                    # 금지 키 제거
+                    parts = [p.strip() for p in raw.split(";") if p.strip()]
+                    filtered: list[str] = []
+                    for p in parts:
+                        # 공통 제거
+                        if p in ("Q", "E", "W", "H", "Shift+H", "Shift+V"):
+                            continue
+                        # 화면 맞춤에 F 제거
+                        if k == "fit_to_window" and p == "F":
+                            continue
+                        # 확대에 Ctrl+- 제거(오입력 방지)
+                        if k == "zoom_in" and p == "Ctrl+-":
+                            continue
+                        # 축소에 Q 제거(오입력 방지)
+                        if k == "zoom_out" and p == "Q":
+                            continue
+                        # 180도 회전에 Shift+H 제거(오입력 방지)
+                        if k == "rotate_180" and p == "Shift+H":
+                            continue
+                        filtered.append(p)
+                    parts = filtered
+                    viewer.settings.setValue(f"keys/custom/{k}", ";".join(parts))
         except Exception:
             pass
         viewer.recent_files = viewer.settings.value("recent/files", [], list)
@@ -173,7 +203,13 @@ def load_settings(viewer) -> None:
         viewer._theme = "dark"
         viewer._ui_margins = (5, 5, 5, 5)
         viewer._ui_spacing = 6
-        viewer._default_view_mode = "fit"
+        try:
+            dvm = str(viewer.settings.value("ui/default_view_mode", "fit", str))
+            if dvm not in ("fit", "fit_width", "fit_height", "actual"):
+                dvm = "fit"
+            viewer._default_view_mode = dvm
+        except Exception:
+            viewer._default_view_mode = "fit"
         viewer._remember_last_view_mode = True
         # Open/Animation/Dir/TIFF 옵션 기본값 로드
         try:
@@ -257,6 +293,52 @@ def load_settings(viewer) -> None:
             viewer._overlay_enabled_default = bool(viewer.settings.value("overlay/enabled_default", False, bool))
         except Exception:
             viewer._overlay_enabled_default = False
+        try:
+            viewer._smooth_transform = bool(viewer.settings.value("view/smooth_transform", True, bool))
+        except Exception:
+            viewer._smooth_transform = True
+        # 보기/줌 고급 옵션
+        # 보기 공유 옵션 제거됨
+        try:
+            viewer._refit_on_transform = bool(viewer.settings.value("view/refit_on_transform", True, bool))
+        except Exception:
+            viewer._refit_on_transform = True
+        try:
+            viewer._fit_margin_pct = int(viewer.settings.value("view/fit_margin_pct", 0))
+        except Exception:
+            viewer._fit_margin_pct = 0
+        try:
+            viewer._wheel_zoom_requires_ctrl = bool(viewer.settings.value("view/wheel_zoom_requires_ctrl", True, bool))
+        except Exception:
+            viewer._wheel_zoom_requires_ctrl = True
+        try:
+            viewer._wheel_zoom_alt_precise = bool(viewer.settings.value("view/wheel_zoom_alt_precise", True, bool))
+        except Exception:
+            viewer._wheel_zoom_alt_precise = True
+        try:
+            viewer._use_fixed_zoom_steps = bool(viewer.settings.value("view/use_fixed_zoom_steps", False, bool))
+        except Exception:
+            viewer._use_fixed_zoom_steps = False
+        try:
+            viewer._zoom_step_factor = float(viewer.settings.value("view/zoom_step_factor", 1.25))
+        except Exception:
+            viewer._zoom_step_factor = 1.25
+        try:
+            viewer._precise_zoom_step_factor = float(viewer.settings.value("view/precise_zoom_step_factor", 1.1))
+        except Exception:
+            viewer._precise_zoom_step_factor = 1.1
+        try:
+            viewer._double_click_action = str(viewer.settings.value("view/double_click_action", "toggle", str))
+        except Exception:
+            viewer._double_click_action = 'toggle'
+        try:
+            viewer._middle_click_action = str(viewer.settings.value("view/middle_click_action", "none", str))
+        except Exception:
+            viewer._middle_click_action = 'none'
+        try:
+            viewer._preserve_visual_size_on_dpr_change = bool(viewer.settings.value("view/preserve_visual_size_on_dpr_change", False, bool))
+        except Exception:
+            pass
         # YAML 구성 로드 제거(롤백)
     except Exception:
         viewer.recent_files = []
@@ -300,6 +382,21 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("fullscreen/show_filmstrip_overlay", bool(getattr(viewer, "_fs_show_filmstrip_overlay", False)))
         viewer.settings.setValue("fullscreen/safe_exit_rule", bool(getattr(viewer, "_fs_safe_exit", True)))
         viewer.settings.setValue("overlay/enabled_default", bool(getattr(viewer, "_overlay_enabled_default", False)))
+        # 기본 보기 모드 및 스무딩 저장
+        viewer.settings.setValue("ui/default_view_mode", str(getattr(viewer, "_default_view_mode", "fit")))
+        viewer.settings.setValue("view/smooth_transform", bool(getattr(viewer, "_smooth_transform", True)))
+        # 보기/줌 고급 옵션 저장
+        # 보기 공유 저장 제거
+        viewer.settings.setValue("view/refit_on_transform", bool(getattr(viewer, "_refit_on_transform", True)))
+        viewer.settings.setValue("view/fit_margin_pct", int(getattr(viewer, "_fit_margin_pct", 0)))
+        viewer.settings.setValue("view/wheel_zoom_requires_ctrl", bool(getattr(viewer, "_wheel_zoom_requires_ctrl", True)))
+        viewer.settings.setValue("view/wheel_zoom_alt_precise", bool(getattr(viewer, "_wheel_zoom_alt_precise", True)))
+        viewer.settings.setValue("view/use_fixed_zoom_steps", bool(getattr(viewer, "_use_fixed_zoom_steps", False)))
+        viewer.settings.setValue("view/zoom_step_factor", float(getattr(viewer, "_zoom_step_factor", 1.25)))
+        viewer.settings.setValue("view/precise_zoom_step_factor", float(getattr(viewer, "_precise_zoom_step_factor", 1.1)))
+        viewer.settings.setValue("view/double_click_action", str(getattr(viewer, "_double_click_action", 'toggle')))
+        viewer.settings.setValue("view/middle_click_action", str(getattr(viewer, "_middle_click_action", 'none')))
+        viewer.settings.setValue("view/preserve_visual_size_on_dpr_change", bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
     except Exception:
         pass
 
