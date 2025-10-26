@@ -78,7 +78,7 @@ class ImageView(QGraphicsView):
                 pass
             # 장면 경계를 이미지 크기로 설정하여 중앙 정렬 기준을 명확히 함
             self._scene.setSceneRect(self._pix_item.boundingRect())
-            # 새 이미지 로드시 현재 보기 모드를 적용
+            # 새 이미지 로드시 현재 보기 모드를 강제 적용하여 일관성 보장
             self.apply_current_view_mode()
             # Reapply current transform state to the new item
             self._apply_item_transform()

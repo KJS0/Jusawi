@@ -7,7 +7,7 @@ def save_last_session(viewer) -> None:
             "file_path": viewer.current_image_path or "",
             "dir_path": os.path.dirname(viewer.current_image_path) if viewer.current_image_path else "",
             "dir_index": int(getattr(viewer, "current_image_index", -1) or -1),
-            "view_mode": getattr(viewer.image_display_area, "_view_mode", getattr(viewer, "_last_view_mode", 'fit')),
+            "view_mode": getattr(viewer, "_session_preferred_view_mode", getattr(viewer.image_display_area, "_view_mode", 'fit')),
             "scale": float(getattr(viewer, "_last_scale", 1.0) or 1.0),
             "fullscreen": bool(viewer.is_fullscreen),
             "window_geometry": viewer.saveGeometry(),
@@ -38,9 +38,20 @@ def restore_last_session(viewer) -> None:
                 pass
             if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
                 viewer.load_image(viewer.image_files_in_dir[viewer.current_image_index], source='restore')
+                try:
+                    # 로드시 플래그/별점 즉시 반영 보조
+                    from ..ui import rating_bar  # type: ignore
+                    rating_bar.refresh(viewer)
+                except Exception:
+                    pass
         elif fpath and os.path.isfile(fpath):
             # 폴더 정보가 없을 때만 단일 파일 복원
             viewer.load_image(fpath, source='restore')
+            try:
+                from ..ui import rating_bar  # type: ignore
+                rating_bar.refresh(viewer)
+            except Exception:
+                pass
         else:
             # 보조 복원: 최근 파일 목록에서 첫 항목 시도
             try:
@@ -52,9 +63,7 @@ def restore_last_session(viewer) -> None:
             except Exception:
                 pass
         # 보기 모드/배율 적용
-        remember = getattr(viewer, "_remember_last_view_mode", True)
-        preferred = getattr(viewer, "_default_view_mode", 'fit')
-        mode_to_apply = vmode if remember else preferred
+        mode_to_apply = vmode or 'fit'
         if mode_to_apply == 'fit':
             viewer.image_display_area.fit_to_window()
         elif mode_to_apply == 'fit_width':
@@ -63,8 +72,14 @@ def restore_last_session(viewer) -> None:
             viewer.image_display_area.fit_to_height()
         elif mode_to_apply == 'actual':
             viewer.image_display_area.reset_to_100()
-        if remember and vmode == 'free' and viewer.image_display_area:
+        if vmode == 'free' and viewer.image_display_area:
             viewer.image_display_area.set_absolute_scale(scale)
+        # 한 틱 뒤 한 번 더 반영
+        try:
+            from PyQt6.QtCore import QTimer  # type: ignore
+            QTimer.singleShot(0, lambda: __import__('importlib').import_module('src.ui.rating_bar').refresh(viewer))
+        except Exception:
+            pass
         # 창 위치/크기 복원은 기본 비활성화 (_restore_window_geometry 가 True일 때만)
         try:
             if bool(getattr(viewer, "_restore_window_geometry", False)):

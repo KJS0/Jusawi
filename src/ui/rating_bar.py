@@ -48,11 +48,25 @@ def register_shortcuts(owner) -> None:
     try:
         from PyQt6.QtGui import QKeySequence, QShortcut  # type: ignore[import]
         owner._rating_shortcuts = []
+        # 숫자(0~5) 단축키를 다시 등록하여 별점 직접 설정
         for n in range(0, 6):
             sc = QShortcut(QKeySequence(str(n)), owner)
             sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
             sc.activated.connect(lambda n=n: owner._on_set_rating(n))
             owner._rating_shortcuts.append(sc)
+        # 숫자 키패드(NumPad)도 동일하게 매핑
+        try:
+            for n in range(0, 6):
+                key_name = f"Keypad{n}"
+                kp_key = getattr(Qt.Key, key_name, None)
+                if kp_key is None:
+                    continue
+                sc_kp = QShortcut(QKeySequence(kp_key), owner)
+                sc_kp.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                sc_kp.activated.connect(lambda n=n: owner._on_set_rating(n))
+                owner._rating_shortcuts.append(sc_kp)
+        except Exception:
+            pass
         owner._flag_sc_z = QShortcut(QKeySequence("Z"), owner)
         owner._flag_sc_z.setContext(Qt.ShortcutContext.ApplicationShortcut)
         owner._flag_sc_z.activated.connect(lambda: owner._on_set_flag('pick'))
@@ -94,20 +108,32 @@ def refresh(owner) -> None:
                 path = owner.image_files_in_dir[owner.current_image_index]
         except Exception:
             path = None
+        # 세션 복원 등으로 디렉터리 목록이 아직 비어있는 경우 현재 파일 경로로 폴백
+        if not path:
+            try:
+                cur = getattr(owner, "current_image_path", "")
+                if cur:
+                    path = cur
+            except Exception:
+                path = None
         rating = 0
         flag = "unflagged"
         if path:
             row = ratings_get_image(path) or {}
             if not row:
+                # 기존 항목이 없으면 디폴트 표시만 하고 DB는 생성하지 않음
+                rating = 0
+                flag = "unflagged"
+            else:
                 try:
-                    st = os.stat(path)
-                    mt = int(st.st_mtime)
+                    rating = int(row.get("rating", 0))
                 except Exception:
-                    mt = 0
-                ratings_upsert_image(path, mt, rating=0, label=None, flag='unflagged')
-                row = {"rating": 0, "flag": "unflagged"}
-            rating = int(row.get("rating", 0))
-            flag = str(row.get("flag", "unflagged"))
+                    rating = 0
+                raw_flag = row.get("flag", "unflagged")
+                try:
+                    flag = str(raw_flag).strip().lower() if raw_flag is not None else "unflagged"
+                except Exception:
+                    flag = "unflagged"
         # 별 상태 반영
         try:
             for i, lb in enumerate(getattr(owner, "_stars", []), start=1):
@@ -141,7 +167,14 @@ def set_rating(owner, n: int) -> None:
         if not (0 <= owner.current_image_index < len(owner.image_files_in_dir)):
             return
         path = owner.image_files_in_dir[owner.current_image_index]
-        new_rating = int(n)
+        # 토글 동작: 현재 평점과 동일한 별을 누르면 0점으로 해제
+        try:
+            row_cur = ratings_get_image(path) or {}
+            cur_rating = int(row_cur.get("rating", 0))
+        except Exception:
+            cur_rating = 0
+        req = int(n)
+        new_rating = 0 if req == cur_rating else req
         try:
             st = os.stat(path)
             mt = int(st.st_mtime)
@@ -157,6 +190,12 @@ def set_rating(owner, n: int) -> None:
         except Exception:
             pass
         refresh(owner)
+        # 이벤트 루프 다음 틱에도 한 번 더 반영(스타일/페인트 타이밍 보강)
+        try:
+            from PyQt6.QtCore import QTimer  # type: ignore[import]
+            QTimer.singleShot(0, lambda: refresh(owner))
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -164,15 +203,25 @@ def set_rating(owner, n: int) -> None:
 def set_flag(owner, f: str) -> None:
     try:
         if not (0 <= owner.current_image_index < len(owner.image_files_in_dir)):
-            return
-        path = owner.image_files_in_dir[owner.current_image_index]
+            # 디렉터리 목록이 없더라도 현재 파일이 있으면 처리
+            path = getattr(owner, "current_image_path", "")
+            if not path:
+                return
+        else:
+            path = owner.image_files_in_dir[owner.current_image_index]
         try:
             st = os.stat(path)
             mt = int(st.st_mtime)
         except Exception:
             mt = 0
         row = ratings_get_image(path) or {}
-        if f == 'rejected':
+        # 동일 플래그를 누르면 unflagged로 토글
+        cur_flag = (row.get("flag") if row else None) or 'unflagged'
+        target = f
+        if str(cur_flag).strip().lower() == str(f).strip().lower():
+            target = 'unflagged'
+
+        if target == 'rejected':
             cur_rating = int(row.get("rating", 0)) if row else 0
             if not row:
                 ratings_upsert_image(path, mt, rating=cur_rating, label=None, flag='rejected')
@@ -183,7 +232,12 @@ def set_flag(owner, f: str) -> None:
             except Exception:
                 pass
             refresh(owner)
-        elif f == 'pick':
+            try:
+                from PyQt6.QtCore import QTimer  # type: ignore[import]
+                QTimer.singleShot(0, lambda: refresh(owner))
+            except Exception:
+                pass
+        elif target == 'pick':
             cur_rating = int(row.get("rating", 0)) if row else 0
             ratings_upsert_image(path, mt, rating=cur_rating, label='Green', flag='pick')
             try:
@@ -191,7 +245,12 @@ def set_flag(owner, f: str) -> None:
             except Exception:
                 pass
             refresh(owner)
-        elif f == 'unflagged':
+            try:
+                from PyQt6.QtCore import QTimer  # type: ignore[import]
+                QTimer.singleShot(0, lambda: refresh(owner))
+            except Exception:
+                pass
+        elif target == 'unflagged':
             cur_rating = int(row.get("rating", 0)) if row else 0
             if cur_rating < 0:
                 cur_rating = 0
@@ -201,6 +260,11 @@ def set_flag(owner, f: str) -> None:
             except Exception:
                 pass
             refresh(owner)
+            try:
+                from PyQt6.QtCore import QTimer  # type: ignore[import]
+                QTimer.singleShot(0, lambda: refresh(owner))
+            except Exception:
+                pass
     except Exception:
         pass
 

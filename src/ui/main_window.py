@@ -297,6 +297,17 @@ class JusawiViewer(QMainWindow):
 
         # 설정 로드 및 최근/세션 복원
         self.load_settings()
+        # YAML에서 고급 캐시 설정이 제공된 경우 이미지 서비스에 적용
+        try:
+            img_max = getattr(self, "_img_cache_max_bytes", None)
+            scaled_max = getattr(self, "_scaled_cache_max_bytes", None)
+            if hasattr(self, "image_service") and self.image_service is not None:
+                try:
+                    self.image_service.set_cache_limits(img_max, scaled_max)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self.rebuild_recent_menu()
         if not getattr(self, "_skip_session_restore", False):
             self.restore_last_session()
@@ -360,11 +371,7 @@ class JusawiViewer(QMainWindow):
         except Exception:
             pass
 
-    def undo_action(self) -> None:
-        hist.undo(self)
-
-    def redo_action(self) -> None:
-        hist.redo(self)
+    # 실행 취소/다시 실행 기능 제거됨
 
     # Settings: 저장/로드
     def load_settings(self):
@@ -551,6 +558,12 @@ class JusawiViewer(QMainWindow):
             rating_bar.refresh(self)
         except Exception:
             pass
+        # 플래그/별점 상태가 첫 프레임에서 누락되지 않게 재시도 예약
+        try:
+            from PyQt6.QtCore import QTimer  # type: ignore[import]
+            QTimer.singleShot(0, lambda: rating_bar.refresh(self))
+        except Exception:
+            pass
 
     def _on_screen_changed(self, screen):
         ds.on_screen_changed(self, screen)
@@ -606,13 +619,44 @@ class JusawiViewer(QMainWindow):
 
     def keyPressEvent(self, event):
         try:
-            # 숫자 0..5: 별점 바로 적용 (충돌 단축키보다 우선 처리)
+            # 숫자 0..5 및 숫자패드 0..5: 별점 바로 적용 (충돌 단축키보다 우선 처리)
             if event.modifiers() == Qt.KeyboardModifier.NoModifier:
                 k = event.key()
-                if Qt.Key.Key_0 <= k <= Qt.Key.Key_5:
-                    self._on_set_rating(int(k) - int(Qt.Key.Key_0))
-                    event.accept()
-                    return
+                # 일반 숫자 0..5 또는 텐키패드 0..5
+                is_top_row = (Qt.Key.Key_0 <= k <= Qt.Key.Key_5)
+                keypad_keys = (
+                    getattr(Qt.Key, 'Keypad0', None), getattr(Qt.Key, 'Keypad1', None), getattr(Qt.Key, 'Keypad2', None),
+                    getattr(Qt.Key, 'Keypad3', None), getattr(Qt.Key, 'Keypad4', None), getattr(Qt.Key, 'Keypad5', None)
+                )
+                is_keypad = k in {kk for kk in keypad_keys if kk is not None}
+                if is_top_row or is_keypad:
+                    # 숫자/키패드를 공통 0..5로 매핑
+                    try:
+                        key_to_num = {
+                            Qt.Key.Key_0: 0, Qt.Key.Key_1: 1, Qt.Key.Key_2: 2, Qt.Key.Key_3: 3, Qt.Key.Key_4: 4, Qt.Key.Key_5: 5,
+                        }
+                        # 키패드 매핑 추가(존재하는 심볼만)
+                        if getattr(Qt.Key, 'Keypad0', None) is not None:
+                            key_to_num[getattr(Qt.Key, 'Keypad0')] = 0
+                        if getattr(Qt.Key, 'Keypad1', None) is not None:
+                            key_to_num[getattr(Qt.Key, 'Keypad1')] = 1
+                        if getattr(Qt.Key, 'Keypad2', None) is not None:
+                            key_to_num[getattr(Qt.Key, 'Keypad2')] = 2
+                        if getattr(Qt.Key, 'Keypad3', None) is not None:
+                            key_to_num[getattr(Qt.Key, 'Keypad3')] = 3
+                        if getattr(Qt.Key, 'Keypad4', None) is not None:
+                            key_to_num[getattr(Qt.Key, 'Keypad4')] = 4
+                        if getattr(Qt.Key, 'Keypad5', None) is not None:
+                            key_to_num[getattr(Qt.Key, 'Keypad5')] = 5
+                        n = key_to_num.get(k, None)
+                        if n is None and Qt.Key.Key_0 <= k <= Qt.Key.Key_5:
+                            n = int(k) - int(Qt.Key.Key_0)
+                    except Exception:
+                        n = None
+                    if n is not None:
+                        self._on_set_rating(n)
+                        event.accept()
+                        return
                 # 플래그: Z=pick, X=rejected, C=unflagged
                 if k == Qt.Key.Key_Z:
                     self._on_set_flag('pick')
@@ -743,6 +787,29 @@ class JusawiViewer(QMainWindow):
 
     def open_file(self):
         file_cmd.open_file(self)
+
+    # ----- 파일/폴더 열기 관련 핸들러 -----
+    def open_folder(self) -> None:
+        try:
+            from PyQt6.QtWidgets import QFileDialog  # type: ignore[import]
+            start_dir = getattr(self, "last_open_dir", "") if (self.last_open_dir and os.path.isdir(self.last_open_dir)) else ""
+            dir_path = QFileDialog.getExistingDirectory(self, "폴더 선택", start_dir)
+        except Exception:
+            dir_path = ""
+        if not dir_path:
+            return
+        self.scan_directory(dir_path)
+        if 0 <= self.current_image_index < len(self.image_files_in_dir):
+            self.load_image(self.image_files_in_dir[self.current_image_index], source='open_folder')
+        else:
+            self.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
+        try:
+            if os.path.isdir(dir_path):
+                self.last_open_dir = dir_path
+                self.save_settings()
+        except Exception:
+            pass
+
 
     def load_image(self, file_path, source='other'):
         return img_loader.load_image(self, file_path, source)

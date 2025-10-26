@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox,
-    QDialogButtonBox, QCheckBox, QWidget, QTabWidget, QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QApplication, QFormLayout
+    QDialogButtonBox, QCheckBox, QWidget, QTabWidget, QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QApplication, QFormLayout, QFileDialog
 )
 from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QKeySequence
@@ -24,103 +24,15 @@ class SettingsDialog(QDialog):
         self.tabs = QTabWidget(self)
         root.addWidget(self.tabs)
 
-        # ----- 일반 탭 -----
-        general = QWidget(self)
-        gen_form = QFormLayout(general)
-        try:
-            # 적당한 여백과 촘촘한 간격
-            gen_form.setContentsMargins(8, 8, 8, 8)
-            gen_form.setHorizontalSpacing(8)
-            gen_form.setVerticalSpacing(4)
-            # 필드가 창 크기에 따라 늘어나지 않도록 고정
-            gen_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-            gen_form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            gen_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        except Exception:
-            pass
-        self.tabs.addTab(general, "일반")
 
-        # Theme
-        self.theme_combo = QComboBox(self)
-        # 표시는 한글, 내부 값은 별도 매핑 사용
-        self.theme_combo.addItems(["시스템", "다크", "라이트"])
-        self.theme_combo.setToolTip("앱 테마를 선택합니다. 시스템은 OS 테마를 따릅니다.")
-        try:
-            gen_form.addRow("테마", self.theme_combo)
-        except Exception:
-            pass
-
-        # Margins L,T,R,B
-        margins_widget = QWidget(self)
-        margins_layout = QHBoxLayout(margins_widget)
-        margins_layout.setContentsMargins(0, 0, 0, 0)
-        try:
-            margins_layout.setSpacing(0)
-        except Exception:
-            pass
-        self.margin_left = _spin(0, 64, 5)
-        self.margin_top = _spin(0, 64, 5)
-        self.margin_right = _spin(0, 64, 5)
-        self.margin_bottom = _spin(0, 64, 5)
-        try:
-            for w in (self.margin_left, self.margin_top, self.margin_right, self.margin_bottom):
-                w.setMaximumWidth(64)
-                from PyQt6.QtWidgets import QSizePolicy
-                w.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        except Exception:
-            pass
-        for w, tip in [
-            (self.margin_left, "왼쪽 여백 (픽셀)"),
-            (self.margin_top, "위쪽 여백 (픽셀)"),
-            (self.margin_right, "오른쪽 여백 (픽셀)"),
-            (self.margin_bottom, "아래 여백 (픽셀)"),
-        ]:
-            w.setToolTip(tip)
-        for w in (self.margin_left, self.margin_top, self.margin_right, self.margin_bottom):
-            margins_layout.addWidget(w)
-        try:
-            gen_form.addRow("여백", margins_widget)
-        except Exception:
-            pass
-
-        # Spacing
-        self.spacing_spin = _spin(0, 64, 6)
-        self.spacing_spin.setToolTip("버튼/위젯 사이 간격 (픽셀)")
-        try:
-            gen_form.addRow("간격", self.spacing_spin)
-        except Exception:
-            pass
-
-        # Default view mode
-        self.view_combo = QComboBox(self)
-        # 표시 한글, 내부 값은 매핑 사용
-        self.view_combo.addItems(["화면 맞춤", "가로 맞춤", "세로 맞춤", "실제 크기"])
-        self.view_combo.setToolTip("새 이미지/앱 시작 시 적용할 기본 보기 모드")
-        try:
-            gen_form.addRow("기본 보기 모드", self.view_combo)
-        except Exception:
-            pass
-
-        # Remember last view mode
-        self.remember_check = QCheckBox("마지막 보기 모드 우선 사용", self)
-        self.remember_check.setToolTip("체크 시 마지막으로 사용한 보기 모드를 우선 적용합니다.")
-        try:
-            gen_form.addRow("", self.remember_check)
-        except Exception:
-            pass
-
-        # ----- 단축키 탭 (지연 초기화) -----
+        # ----- 단축키 탭 -----
         self.keys_tab = QWidget(self)
         self.tabs.addTab(self.keys_tab, "단축키")
         self._keys_ready = False
 
-        # 하단: 좌측 리셋, 우측 확인/취소
+        # 하단: 우측 확인/취소만 표시
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
-        self.reset_btn = QPushButton("기본 설정으로", self)
-        self.reset_btn.setToolTip("테마, 여백/간격, 기본 보기 모드, 단축키를 기본값으로 되돌립니다.")
-        self.reset_btn.clicked.connect(self._on_reset_defaults)
-        bottom_row.addWidget(self.reset_btn)
         bottom_row.addStretch(1)
         root.addLayout(bottom_row)
 
@@ -168,48 +80,11 @@ class SettingsDialog(QDialog):
 
     # populate from viewer
     def load_from_viewer(self, viewer):
-        theme = getattr(viewer, "_theme", "dark")
-        theme_map = {"system": "시스템", "dark": "다크", "light": "라이트"}
-        idx = max(0, self.theme_combo.findText(theme_map.get(theme, "다크")))
-        self.theme_combo.setCurrentIndex(idx)
-
-        margins = getattr(viewer, "_ui_margins", (5, 5, 5, 5))
-        try:
-            self.margin_left.setValue(int(margins[0]))
-            self.margin_top.setValue(int(margins[1]))
-            self.margin_right.setValue(int(margins[2]))
-            self.margin_bottom.setValue(int(margins[3]))
-        except Exception:
-            pass
-
-        spacing = int(getattr(viewer, "_ui_spacing", 6))
-        self.spacing_spin.setValue(spacing)
-
-        dvm = getattr(viewer, "_default_view_mode", "fit")
-        vm_map = {"fit": "화면 맞춤", "fit_width": "가로 맞춤", "fit_height": "세로 맞춤", "actual": "실제 크기"}
-        idx_vm = max(0, self.view_combo.findText(vm_map.get(dvm, "화면 맞춤")))
-        self.view_combo.setCurrentIndex(idx_vm)
-
-        remember = bool(getattr(viewer, "_remember_last_view_mode", True))
-        self.remember_check.setChecked(remember)
         # viewer 참조 저장(지연 로드시 사용)
         self._viewer_for_keys = viewer
 
     # commit back to viewer (does not save)
     def apply_to_viewer(self, viewer):
-        # 한글 → 내부 값 매핑
-        theme_rev = {"시스템": "system", "다크": "dark", "라이트": "light"}
-        viewer._theme = theme_rev.get(self.theme_combo.currentText(), "dark")
-        viewer._ui_margins = (
-            int(self.margin_left.value()),
-            int(self.margin_top.value()),
-            int(self.margin_right.value()),
-            int(self.margin_bottom.value()),
-        )
-        viewer._ui_spacing = int(self.spacing_spin.value())
-        vm_rev = {"화면 맞춤": "fit", "가로 맞춤": "fit_width", "세로 맞춤": "fit_height", "실제 크기": "actual"}
-        viewer._default_view_mode = vm_rev.get(self.view_combo.currentText(), "fit")
-        viewer._remember_last_view_mode = bool(self.remember_check.isChecked())
         # 키 저장(중복/금지 키 검증 포함)
         mapping = None
         if self._reset_keys_to_defaults:
@@ -229,28 +104,15 @@ class SettingsDialog(QDialog):
 
     # ----- helpers -----
     def _on_reset_defaults(self):
-        # 일반 탭 기본값
-        self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findText("다크")))
-        self.margin_left.setValue(5)
-        self.margin_top.setValue(5)
-        self.margin_right.setValue(5)
-        self.margin_bottom.setValue(5)
-        self.spacing_spin.setValue(6)
-        self.view_combo.setCurrentIndex(max(0, self.view_combo.findText("화면 맞춤")))
-        self.remember_check.setChecked(True)
         # 단축키 탭 기본값: 레지스트리의 default_keys로 되돌림(없으면 비움)
         # 테이블은 COMMANDS 순으로 채워져 있음
         if getattr(self, "_keys_ready", False) and hasattr(self, "keys_table"):
             row = 0
             for cmd in COMMANDS:
-                # 각 행에서 편집기 찾기
                 editor = self.keys_table.cellWidget(row, 3) if row < self.keys_table.rowCount() else None
                 if isinstance(editor, QKeySequenceEdit):
                     defaults = cmd.default_keys[:]
-                    if defaults:
-                        editor.setKeySequence(QKeySequence(defaults[0]))
-                    else:
-                        editor.setKeySequence(QKeySequence())
+                    editor.setKeySequence(QKeySequence(defaults[0]) if defaults else QKeySequence())
                 row += 1
         self._reset_keys_to_defaults = True
 
@@ -265,6 +127,14 @@ class SettingsDialog(QDialog):
         if mapping is None:
             return
         self.accept()
+
+    def _on_import_yaml(self):
+        # 제거됨
+        return
+
+    def _on_export_yaml(self):
+        # 제거됨
+        return
 
     def _on_tab_changed(self, index: int):
         # 일반 탭은 작게, 단축키 탭은 내용 기반으로 크게
@@ -294,8 +164,8 @@ class SettingsDialog(QDialog):
     def _build_keys_tab(self):
         # 실제 키 탭 UI 구성 및 데이터 로드
         keys_layout = QVBoxLayout(self.keys_tab)
-        self.keys_table = QTableWidget(0, 5, self.keys_tab)
-        self.keys_table.setHorizontalHeaderLabels(["조건", "명령", "설명", "단축키", "기본값"])
+        self.keys_table = QTableWidget(0, 4, self.keys_tab)
+        self.keys_table.setHorizontalHeaderLabels(["조건", "명령", "설명", "단축키"])
         try:
             # 표 셀 선택/편집 비활성화(편집기는 별도 위젯으로 사용)
             from PyQt6.QtWidgets import QAbstractItemView
@@ -307,11 +177,11 @@ class SettingsDialog(QDialog):
         self._keys_ready = True
         # 데이터 채우기
         viewer = getattr(self, "_viewer_for_keys", None)
-        eff = get_effective_keymap(getattr(viewer, "settings", None)) if viewer else {}
+        eff = get_effective_keymap(getattr(viewer, "settings", None))
         self.keys_table.setRowCount(0)
         self._key_editors = []
         self._editor_meta = {}
-        for cmd in COMMANDS:
+        for cmd in [c for c in COMMANDS if c.id != "reset_to_100"]:
             row = self.keys_table.rowCount()
             self.keys_table.insertRow(row)
             cond_text = "고정" if cmd.lock_key else "-"
@@ -328,81 +198,36 @@ class SettingsDialog(QDialog):
             self.keys_table.setItem(row, 0, it0)
             self.keys_table.setItem(row, 1, it1)
             self.keys_table.setItem(row, 2, it2)
-            editor = QKeySequenceEdit(self)
-            try:
-                editor.setMaximumSequenceLength(1)
-            except Exception:
-                pass
+            # 읽기 전용 텍스트로 표시(여러 키가 있을 경우 ; 로 연결)
             seqs = eff.get(cmd.id, []) or []
-            editor.setKeySequence(QKeySequence(seqs[0]) if seqs else QKeySequence())
-            editor.setEnabled(not cmd.lock_key)
-            if not cmd.lock_key:
-                try:
-                    # 키 변경 시 정규화 및 기본값 버튼 상태 동기화
-                    editor.keySequenceChanged.connect(lambda _seq, e=editor, defaults=cmd.default_keys[:], row_idx=row: self._on_key_changed(e, defaults, row_idx))
-                    editor.setToolTip("Backspace/Delete로 해제, 기본값과 다를 때만 '기본값' 활성화")
-                except Exception:
-                    pass
-            # 포커스/키 이벤트 필터 등록(배타 포커스, Backspace 해제)
+            txt = "; ".join([str(s) for s in seqs]) if seqs else ""
+            it3 = QTableWidgetItem(txt)
             try:
-                editor.installEventFilter(self)
+                it3.setFlags(Qt.ItemFlag.ItemIsEnabled)
             except Exception:
                 pass
-            self._key_editors.append(editor)
-            # prev: 현재 키 문자열을 저장해 유효성 실패 시 복원
-            init_txt = self._seq_to_text(editor.keySequence())
-            self._editor_meta[editor] = {"row": row, "defaults": cmd.default_keys[:], "locked": bool(cmd.lock_key), "prev": init_txt}
-            self.keys_table.setCellWidget(row, 3, editor)
-            btn_reset = QPushButton("기본값")
-            # 기본값과 현재 값이 같으면 비활성화
-            if cmd.lock_key:
-                btn_reset.setEnabled(False)
-            else:
-                cur_txt = self._seq_to_text(editor.keySequence())
-                def_txt = self._normalize_default_text(cmd.default_keys[:])
-                btn_reset.setEnabled(bool(def_txt) and cur_txt != def_txt)
-            def make_reset(e=editor, defaults=cmd.default_keys[:]):
-                return lambda: e.setKeySequence(QKeySequence(defaults[0]) if defaults else QKeySequence())
-            btn_reset.clicked.connect(make_reset())
-            self.keys_table.setCellWidget(row, 4, btn_reset)
-            editor._cmd_id = cmd.id  # type: ignore
+            self.keys_table.setItem(row, 3, it3)
         # 컬럼/크기 조정
         try:
             header = self.keys_table.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
             self.keys_table.resizeColumnsToContents()
         except Exception:
             pass
 
     def _collect_mapping_from_ui(self, validate_against_fixed: bool = True):
         from PyQt6.QtWidgets import QMessageBox
-        # 기본값 초기화 모드일 경우 기본값으로 매핑 구성
-        if self._reset_keys_to_defaults:
-            mapping = {}
-            for cmd in COMMANDS:
-                if cmd.lock_key:
-                    continue
-                # 기본값은 최대 1개만 허용(단일 단축키 정책)
-                mapping[cmd.id] = cmd.default_keys[:1]
-        else:
-            mapping = {}
-            if getattr(self, "_keys_ready", False) and hasattr(self, "keys_table"):
-                for row in range(self.keys_table.rowCount()):
-                    editor = self.keys_table.cellWidget(row, 3)
-                    if isinstance(editor, QKeySequenceEdit):
-                        cmd_id = getattr(editor, "_cmd_id", "")
-                        if not cmd_id:
-                            continue
-                        seq = editor.keySequence()
-                        if seq and not seq.isEmpty():
-                            # 단일 단축키만 허용
-                            mapping[cmd_id] = [seq.toString()]
-                        else:
-                            mapping[cmd_id] = []
+        # 열람 전용: 현재 테이블의 텍스트를 그대로 저장 대상으로 수집
+        mapping: dict[str, list[str]] = {}
+        if getattr(self, "_keys_ready", False) and hasattr(self, "keys_table"):
+            for row in range(self.keys_table.rowCount()):
+                cmd = COMMANDS[row]
+                item = self.keys_table.item(row, 3)
+                txt = item.text().strip() if item else ""
+                mapping[cmd.id] = [txt] if txt else []
 
         # 유효성 검사: 중복, 고정키 충돌, 예약키 금지
         if validate_against_fixed:
@@ -496,12 +321,13 @@ class SettingsDialog(QDialog):
                         if k:
                             fixed_keys.add(k)
             reserved = {"Alt+F4"}
-            # 현재 에디터 외 사용중 키 수집
+            # 현재 행 외 사용중 키 수집
             used = set()
-            for ed in getattr(self, "_key_editors", []) or []:
-                if ed is editor:
+            for r in range(self.keys_table.rowCount()):
+                if r == row_idx:
                     continue
-                k = self._seq_to_text(ed.keySequence())
+                item = self.keys_table.item(r, 3)
+                k = item.text().strip() if item else ""
                 if k:
                     used.add(k)
             if cur_txt in reserved:

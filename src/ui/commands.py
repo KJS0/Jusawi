@@ -11,6 +11,10 @@ def fit_to_window(viewer: "JusawiViewer") -> None:
         return
     viewer.image_display_area.fit_to_window()
     viewer.update_button_states()
+    try:
+        viewer._session_preferred_view_mode = 'fit'
+    except Exception:
+        pass
 
 
 def fit_to_width(viewer: "JusawiViewer") -> None:
@@ -18,6 +22,10 @@ def fit_to_width(viewer: "JusawiViewer") -> None:
         return
     viewer.image_display_area.fit_to_width()
     viewer.update_button_states()
+    try:
+        viewer._session_preferred_view_mode = 'fit_width'
+    except Exception:
+        pass
 
 
 def fit_to_height(viewer: "JusawiViewer") -> None:
@@ -25,6 +33,10 @@ def fit_to_height(viewer: "JusawiViewer") -> None:
         return
     viewer.image_display_area.fit_to_height()
     viewer.update_button_states()
+    try:
+        viewer._session_preferred_view_mode = 'fit_height'
+    except Exception:
+        pass
 
 
 def zoom_in(viewer: "JusawiViewer") -> None:
@@ -49,6 +61,10 @@ def reset_to_100(viewer: "JusawiViewer") -> None:
     viewer.image_display_area.reset_to_100()
     viewer.update_button_states()
     viewer.update_status_right()
+    try:
+        viewer._session_preferred_view_mode = 'actual'
+    except Exception:
+        pass
 
 
 def rotate_cw_90(viewer: "JusawiViewer") -> None:

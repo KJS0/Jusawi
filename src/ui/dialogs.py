@@ -26,6 +26,11 @@ def open_settings_dialog(viewer: "JusawiViewer") -> None:
     d = SettingsDialog(viewer)
     viewer._settings_dialog = d
     d.load_from_viewer(viewer)
+    # 단축키 탭을 즉시 초기화하여 기본 단축키가 표시되도록 강제
+    try:
+        d.focus_shortcuts_tab()
+    except Exception:
+        pass
     if d.exec() == d.DialogCode.Accepted:
         d.apply_to_viewer(viewer)
         try:

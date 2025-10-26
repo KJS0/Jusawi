@@ -115,6 +115,19 @@ def open_file(viewer: "JusawiViewer") -> None:
                 viewer.log.info("open_dialog_applied_last_dir | dir=%s", os.path.basename(parent_dir))
             except Exception:
                 pass
+            # 옵션: 파일 열기 후 해당 폴더를 스캔하여 탐색 가능하도록 구성
+            try:
+                if bool(getattr(viewer, "_open_scan_dir_after_open", True)):
+                    viewer.scan_directory(parent_dir)
+                    # 현재 파일 인덱스로 이동
+                    try:
+                        if file_path in (viewer.image_files_in_dir or []):
+                            viewer.current_image_index = (viewer.image_files_in_dir or []).index(file_path)
+                            viewer.load_image_at_current_index()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     except Exception:
         pass
 

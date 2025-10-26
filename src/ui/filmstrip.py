@@ -189,6 +189,17 @@ class FilmstripModel(QAbstractListModel):
         self.endResetModel()
         if 0 <= current_index < len(self._items):
             self.dataChanged.emit(self.index(current_index, 0), self.index(current_index, 0), [])
+            try:
+                # 현재 인덱스 선택 반영 후 상단 바(별점/플래그) 갱신
+                from . import rating_bar  # type: ignore
+                parent = getattr(self, 'parent', lambda: None)()
+                if parent is None:
+                    # 모델이 뷰어에 바인딩되어 있으므로 상위 위젯 탐색
+                    parent = getattr(self, 'window', lambda: None)()
+                if parent is not None:
+                    rating_bar.refresh(parent)
+            except Exception:
+                pass
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._items)

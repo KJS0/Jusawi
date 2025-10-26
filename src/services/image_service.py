@@ -138,6 +138,20 @@ class ImageService(QObject):
         # 저장 위임 서비스
         self._save_service = SaveService()
 
+    def set_cache_limits(self, image_cache_max_bytes: int | None = None, scaled_cache_max_bytes: int | None = None) -> None:
+        try:
+            if isinstance(image_cache_max_bytes, int) and image_cache_max_bytes > 0:
+                self._img_cache._max_bytes = int(image_cache_max_bytes)
+                self._img_cache._evict_if_needed()
+        except Exception:
+            pass
+        try:
+            if isinstance(scaled_cache_max_bytes, int) and scaled_cache_max_bytes > 0:
+                self._scaled_cache._max_bytes = int(scaled_cache_max_bytes)
+                self._scaled_cache._evict_if_needed()
+        except Exception:
+            pass
+
     def scan_directory(self, dir_path: str, current_image_path: str | None):
         return scan_directory_util(dir_path, current_image_path)
 

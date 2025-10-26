@@ -11,6 +11,13 @@ if TYPE_CHECKING:
 
 
 def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> None:
+    # 새 이미지 적용 전에 변환 상태를 초기화하여 보기 모드 계산이 일관되게 되도록 함
+    try:
+        viewer._tf_rotation = 0
+        viewer._tf_flip_h = False
+        viewer._tf_flip_v = False
+    except Exception:
+        pass
     pixmap = QPixmap.fromImage(img)
     viewer.image_display_area.setPixmap(pixmap)
     try:
@@ -94,16 +101,38 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
     viewer.update_button_states()
     viewer.update_status_left()
     viewer.update_status_right()
-    viewer._tf_rotation = 0
-    viewer._tf_flip_h = False
-    viewer._tf_flip_v = False
+    # 변환 상태는 상단에서 초기화되었으므로, 현재 뷰에 반영
     viewer._apply_transform_to_view()
+    try:
+        pref = getattr(viewer, "_session_preferred_view_mode", None)
+        if pref == 'fit':
+            viewer.image_display_area.fit_to_window()
+        elif pref == 'fit_width':
+            viewer.image_display_area.fit_to_width()
+        elif pref == 'fit_height':
+            viewer.image_display_area.fit_to_height()
+        elif pref == 'actual':
+            viewer.image_display_area.reset_to_100()
+    except Exception:
+        pass
     viewer._mark_dirty(False)
+    # 별점/플래그 표시 갱신(최초 로드시에도 즉시 반영)
+    try:
+        from . import rating_bar
+        rating_bar.refresh(viewer)
+    except Exception:
+        pass
     # 필름 스트립 선택 동기화(내비게이션 등으로 변경 시 표시 반영)
     try:
         if hasattr(viewer, "filmstrip") and viewer.filmstrip is not None:
             if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
                 viewer.filmstrip.set_current_index(viewer.current_image_index)
+    except Exception:
+        pass
+    # 필름스트립 인덱스 동기화 이후 한 번 더 갱신해 플래그 표시를 확실히 반영
+    try:
+        from . import rating_bar
+        rating_bar.refresh(viewer)
     except Exception:
         pass
     # 정보 패널 갱신(보일 때만)

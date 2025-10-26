@@ -9,14 +9,12 @@ def style_rating_bar(viewer) -> None:
 
 
 def apply_ui_theme_and_spacing(viewer) -> None:
+    # 여백/간격은 고정 기본값 적용
     try:
-        m = getattr(viewer, "_ui_margins", (5, 5, 5, 5))
-        viewer.main_layout.setContentsMargins(int(m[0]), int(m[1]), int(m[2]), int(m[3]))
-        spacing = int(getattr(viewer, "_ui_spacing", 6))
-        viewer.main_layout.setSpacing(spacing)
+        viewer.main_layout.setContentsMargins(5, 5, 5, 5)
+        viewer.main_layout.setSpacing(6)
     except Exception:
         pass
-    # Light 테마 제거: 항상 다크 테마로 강제
     resolved = 'dark'
     try:
         viewer._resolved_theme = resolved
@@ -32,18 +30,18 @@ def apply_ui_theme_and_spacing(viewer) -> None:
     try:
         button_style = f"color: {fg}; background-color: transparent;"
         for btn in [
-            viewer.open_button,
-            viewer.recent_button,
+            getattr(viewer, 'open_button', None),
+            getattr(viewer, 'recent_button', None),
             getattr(viewer, 'info_button', None),
-            viewer.fullscreen_button,
-            viewer.prev_button,
-            viewer.next_button,
-            viewer.zoom_out_button,
-            viewer.fit_button,
-            viewer.zoom_in_button,
-            viewer.rotate_left_button,
-            viewer.rotate_right_button,
-            viewer.settings_button,
+            getattr(viewer, 'fullscreen_button', None),
+            getattr(viewer, 'prev_button', None),
+            getattr(viewer, 'next_button', None),
+            getattr(viewer, 'zoom_out_button', None),
+            getattr(viewer, 'fit_button', None),
+            getattr(viewer, 'zoom_in_button', None),
+            getattr(viewer, 'rotate_left_button', None),
+            getattr(viewer, 'rotate_right_button', None),
+            getattr(viewer, 'settings_button', None),
             getattr(viewer, 'similar_button', None),
         ]:
             if btn:
@@ -61,21 +59,6 @@ def apply_ui_theme_and_spacing(viewer) -> None:
             try:
                 if getattr(viewer, 'similar_button', None):
                     viewer.similar_button.setStyleSheet("color: #FFFFFF; background-color: transparent;")
-            except Exception:
-                pass
-        else:
-            # 라이트 테마에서는 전체 버튼과 동일 색 적용
-            try:
-                viewer.ai_button.setStyleSheet(button_style)
-            except Exception:
-                pass
-            try:
-                viewer.search_button.setStyleSheet(button_style)
-            except Exception:
-                pass
-            try:
-                if getattr(viewer, 'similar_button', None):
-                    viewer.similar_button.setStyleSheet(button_style)
             except Exception:
                 pass
     except Exception:
