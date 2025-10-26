@@ -1,7 +1,7 @@
 import os
 import sys
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu, QTextEdit  # type: ignore[import]
-from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent, QUrl, pyqtSignal, QObject  # type: ignore[import]
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QApplication, QMainWindow, QLabel, QSizePolicy, QMenu, QTextEdit, QGraphicsOpacityEffect  # type: ignore[import]
+from PyQt6.QtCore import QTimer, Qt, QSettings, QPointF, QEvent, QUrl, pyqtSignal, QObject, QPoint, QEasingCurve, QPropertyAnimation  # type: ignore[import]
 from PyQt6.QtGui import QKeySequence, QShortcut, QImage, QAction, QPixmap, QMovie, QColorSpace, QDesktopServices  # type: ignore[import]
 
 from .image_view import ImageView
@@ -204,6 +204,11 @@ class JusawiViewer(QMainWindow):
             pass
         # 하단 필름 스트립을 고정 배치로 롤백
         self.main_layout.addWidget(self.filmstrip, 0)
+        # 전체 캐시 리셋 시 썸네일 메모리도 함께 초기화할 수 있도록 핸들러 제공
+        try:
+            self._clear_filmstrip_cache = lambda: getattr(self.filmstrip, "_cache", None) and self.filmstrip._cache.clear()
+        except Exception:
+            self._clear_filmstrip_cache = lambda: None
 
         # 필름 스트립 컨트롤 바(별점/플래그)
         try:
@@ -294,6 +299,23 @@ class JusawiViewer(QMainWindow):
 
         # 토스트 비활성화: 상태바/다이얼로그만 사용
         self.toast = None
+
+        # 정보 오버레이 라벨 및 UI/커서 자동 숨김 타이머 초기화
+        try:
+            self._info_overlay = QLabel(self.image_display_area.viewport())
+            self._info_overlay.setVisible(False)
+            self._info_overlay.setStyleSheet("background-color: rgba(0,0,0,120); color: #EAEAEA; padding: 6px 8px; border-radius: 4px; font-size: 12px;")
+            self._info_overlay.move(10, 10)
+        except Exception:
+            self._info_overlay = None
+        self._overlay_visible = False
+        self._ui_chrome_visible = True
+        self._ui_auto_hide_timer = QTimer(self)
+        self._ui_auto_hide_timer.setSingleShot(True)
+        self._ui_auto_hide_timer.timeout.connect(lambda: self._apply_ui_chrome_visibility(False, temporary=True))
+        self._cursor_hide_timer = QTimer(self)
+        self._cursor_hide_timer.setSingleShot(True)
+        self._cursor_hide_timer.timeout.connect(self._hide_cursor_if_fullscreen)
 
         # 설정 로드 및 최근/세션 복원
         self.load_settings()
@@ -444,6 +466,10 @@ class JusawiViewer(QMainWindow):
     def on_scale_changed(self, scale: float):
         self._last_scale = scale
         self.update_status_right()
+        try:
+            self._update_info_overlay_text()
+        except Exception:
+            pass
         # 디바운스 후 스케일별 다운샘플 적용
         try:
             if getattr(self, "_in_dpr_transition", False):
@@ -456,6 +482,10 @@ class JusawiViewer(QMainWindow):
         self._last_cursor_x = x
         self._last_cursor_y = y
         self.update_status_right()
+        try:
+            self._on_user_activity()
+        except Exception:
+            pass
 
     # ----- 애니메이션 컨트롤 -----
     def _is_current_file_animation(self) -> bool:
@@ -615,6 +645,13 @@ class JusawiViewer(QMainWindow):
     def event(self, e):
         if lifecycle.before_event(self, e):
             return super().event(e)
+        try:
+            et = e.type()
+            from PyQt6.QtCore import QEvent  # type: ignore[import]
+            if et in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.Wheel, QEvent.Type.KeyPress):
+                self._on_user_activity()
+        except Exception:
+            pass
         return super().event(e)
 
     def keyPressEvent(self, event):
@@ -681,6 +718,52 @@ class JusawiViewer(QMainWindow):
         """키보드 단축키 설정"""
         apply_shortcuts_ext(self)
 
+    # ----- 사용자 요청 단축키 핸들러 -----
+    def reload_current_image(self):
+        try:
+            path = self.current_image_path or ""
+            if not path or not os.path.isfile(path):
+                try:
+                    self.statusBar().showMessage("다시 읽을 이미지가 없습니다.", 2000)
+                except Exception:
+                    pass
+                return
+            # 파일만 다시 로드 + 폴더 재스캔(리셋)
+            try:
+                # 모든 캐시를 초기화하여 처음 로드처럼 동작
+                try:
+                    self.image_service.clear_all_caches()
+                except Exception:
+                    pass
+                self.image_service.invalidate_path(path)
+            except Exception:
+                pass
+            # 폴더 재스캔: 현재 파일이 속한 디렉터리 기준
+            try:
+                dirp = os.path.dirname(path)
+                if dirp and os.path.isdir(dirp):
+                    try:
+                        # 썸네일 메모리 캐시도 초기화
+                        self._clear_filmstrip_cache()
+                    except Exception:
+                        pass
+                    # 인덱스 보존을 위해 현재 파일 경로를 기준으로 재스캔 후 현재 인덱스 복원
+                    self.scan_directory(dirp)
+                    try:
+                        nc = os.path.normcase
+                        if self.image_files_in_dir:
+                            idx = [nc(p) for p in self.image_files_in_dir].index(nc(path))
+                            self.current_image_index = idx
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            self.load_image(path, source='reload')
+        except Exception:
+            pass
+
+    # open_recent_list 단축키 제거됨
+
     def _apply_ui_theme_and_spacing(self):
         apply_theme(self)
         try:
@@ -714,6 +797,31 @@ class JusawiViewer(QMainWindow):
         else:
             self.enter_fullscreen()
 
+    def toggle_ui_chrome(self):
+        """툴바/상태바/필름스트립/평점바 표시 전환"""
+        new_visible = not bool(getattr(self, "_ui_chrome_visible", True))
+        self._apply_ui_chrome_visibility(new_visible, temporary=False)
+        if self.is_fullscreen and new_visible and int(getattr(self, "_fs_auto_hide_ms", 0)) > 0:
+            try:
+                self._ui_auto_hide_timer.start(int(self._fs_auto_hide_ms))
+            except Exception:
+                pass
+
+    def toggle_info_overlay(self):
+        """파일/해상도/배율 정보 오버레이 표시 전환(전체화면 외에서도 동작)"""
+        if getattr(self, "_info_overlay", None) is None:
+            return
+        self._overlay_visible = not bool(getattr(self, "_overlay_visible", False))
+        if self._overlay_visible:
+            try:
+                self._update_info_overlay_text()
+            except Exception:
+                pass
+        try:
+            self._info_overlay.setVisible(self._overlay_visible)
+        except Exception:
+            pass
+
     def mousePressEvent(self, event):
         try:
             if map_click.handle_mouse_press(self, event):
@@ -727,8 +835,31 @@ class JusawiViewer(QMainWindow):
         """전체화면 모드 진입 (애니메이션 없이)"""
         fs_enter_fullscreen(self)
         try:
+            self._ensure_fs_overlays_created()
+            self._position_fullscreen_overlays()
+        except Exception:
+            pass
+        # 전체화면 진입 시 보기 모드 적용
+        try:
+            mode = str(getattr(self, "_fs_enter_view_mode", "keep"))
+        except Exception:
+            mode = "keep"
+        try:
+            if mode in ("fit", "fit_width", "fit_height", "actual"):
+                if mode == "fit":
+                    self.image_display_area.fit_to_window()
+                elif mode == "fit_width":
+                    self.image_display_area.fit_to_width()
+                elif mode == "fit_height":
+                    self.image_display_area.fit_to_height()
+                else:
+                    self.image_display_area.reset_to_100()
+        except Exception:
+            pass
+        # 필름스트립/평점바 초기 상태
+        try:
             if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                self.filmstrip.setVisible(False)
+                self.filmstrip.setVisible(bool(getattr(self, "_fs_show_filmstrip_overlay", False)))
         except Exception:
             pass
         try:
@@ -736,10 +867,24 @@ class JusawiViewer(QMainWindow):
                 self._rating_flag_bar.setVisible(False)
         except Exception:
             pass
+        # 진입 시 UI 크롬은 기본 숨김(자동 숨김이 없으면 유지)
+        self._apply_ui_chrome_visibility(False, temporary=True)
+        self._start_auto_hide_timers()
 
     def exit_fullscreen(self):
         """전체화면 모드 종료 (제목표시줄 보장)"""
         fs_exit_fullscreen(self)
+        # 진행 중인 오버레이 애니메이션 강제 중지
+        try:
+            if hasattr(self, "_anim_toolbar") and self._anim_toolbar:
+                self._anim_toolbar.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_anim_filmstrip") and self._anim_filmstrip:
+                self._anim_filmstrip.stop()
+        except Exception:
+            pass
         try:
             if hasattr(self, 'filmstrip') and self.filmstrip is not None:
                 self.filmstrip.setVisible(True)
@@ -750,8 +895,36 @@ class JusawiViewer(QMainWindow):
                 self._rating_flag_bar.setVisible(True)
         except Exception:
             pass
+        # UI 크롬/커서 복원 및 타이머 중지
+        self._apply_ui_chrome_visibility(True, temporary=False)
+        try:
+            self._ui_auto_hide_timer.stop()
+            self._cursor_hide_timer.stop()
+            self._restore_cursor()
+            self._restore_overlays_to_layout()
+            # 강제 재배치 및 보이기(간헐적 비가시성 회피)
+            try:
+                if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                    self.filmstrip.setVisible(True)
+                    self.filmstrip.updateGeometry()
+                    self.filmstrip.repaint()
+                    from PyQt6.QtCore import QTimer  # type: ignore[import]
+                    QTimer.singleShot(0, lambda: (self.filmstrip.setVisible(True), self.filmstrip.raise_(), self.filmstrip.repaint()))
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def handle_escape(self):
+        # 안전 종료 규칙: 전체화면에서 Esc를 누르면 우선 UI만 표시
+        try:
+            if bool(getattr(self, "_fs_safe_exit", True)) and self.is_fullscreen:
+                if not bool(getattr(self, "_ui_chrome_visible", True)):
+                    self._apply_ui_chrome_visibility(True, temporary=True)
+                    self._start_auto_hide_timers()
+                    return
+        except Exception:
+            pass
         util_handle_escape(self)
 
     def stop_slideshow(self):
@@ -805,7 +978,8 @@ class JusawiViewer(QMainWindow):
             self.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
         try:
             if os.path.isdir(dir_path):
-                self.last_open_dir = dir_path
+                if bool(getattr(self, "_remember_last_open_dir", True)):
+                    self.last_open_dir = dir_path
                 self.save_settings()
         except Exception:
             pass
@@ -921,8 +1095,15 @@ class JusawiViewer(QMainWindow):
                 self.current_image_index = row
                 self.load_image_at_current_index()
                 try:
-                    # 자동 스크롤(중앙 정렬)
+                    # 자동 스크롤(중앙 정렬) — 설정에 따라 수행
                     self.filmstrip.set_current_index(row)
+                    try:
+                        if bool(getattr(self, "_filmstrip_auto_center", True)):
+                            from PyQt6.QtWidgets import QAbstractItemView  # type: ignore[import]
+                            idx = self.filmstrip.model().index(row, 0)
+                            self.filmstrip.scrollTo(idx, QAbstractItemView.ScrollHint.PositionAtCenter)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 try:
@@ -947,3 +1128,262 @@ class JusawiViewer(QMainWindow):
             self._nav.update_button_states()
         else:
             nav_update_button_states(self)
+
+    # ----- 내부 유틸: UI 크롬/오버레이/커서 -----
+    def _apply_ui_chrome_visibility(self, visible: bool, temporary: bool = False) -> None:
+        self._ui_chrome_visible = bool(visible)
+        if not self.is_fullscreen:
+            try:
+                if hasattr(self, 'button_bar') and self.button_bar:
+                    self.button_bar.setVisible(bool(visible))
+            except Exception:
+                pass
+            try:
+                self.statusBar().setVisible(bool(visible))
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                    self.filmstrip.setVisible(bool(visible))
+            except Exception:
+                pass
+            try:
+                if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                    self._rating_flag_bar.setVisible(bool(visible))
+            except Exception:
+                pass
+            return
+        try:
+            self._animate_fs_overlay(visible)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                self._rating_flag_bar.setVisible(bool(visible) and (not self.is_fullscreen))
+        except Exception:
+            pass
+
+    def _update_info_overlay_text(self) -> None:
+        if getattr(self, "_info_overlay", None) is None:
+            return
+        try:
+            path = self.current_image_path or ""
+            name = os.path.basename(path) if path else "-"
+        except Exception:
+            name = "-"
+        try:
+            w = int(getattr(self.image_display_area, "_natural_width", 0) or 0)
+            h = int(getattr(self.image_display_area, "_natural_height", 0) or 0)
+        except Exception:
+            w = h = 0
+        try:
+            scale_pct = int(round(float(getattr(self, "_last_scale", 1.0) or 1.0) * 100))
+        except Exception:
+            scale_pct = 100
+        txt = f"{name}\n해상도: {w} x {h}\n배율: {scale_pct}%"
+        try:
+            self._info_overlay.setText(txt)
+        except Exception:
+            pass
+
+    def _on_user_activity(self) -> None:
+        if not self.is_fullscreen:
+            return
+        try:
+            self._ensure_fs_overlays_created()
+        except Exception:
+            pass
+        if int(getattr(self, "_fs_auto_hide_ms", 0)) > 0:
+            self._apply_ui_chrome_visibility(True, temporary=True)
+            try:
+                self._ui_auto_hide_timer.start(int(self._fs_auto_hide_ms))
+            except Exception:
+                pass
+        if int(getattr(self, "_fs_auto_hide_cursor_ms", 0)) > 0:
+            self._restore_cursor()
+            try:
+                self._cursor_hide_timer.start(int(self._fs_auto_hide_cursor_ms))
+            except Exception:
+                pass
+
+    def _start_auto_hide_timers(self) -> None:
+        if not self.is_fullscreen:
+            return
+        try:
+            if int(getattr(self, "_fs_auto_hide_ms", 0)) > 0:
+                self._ui_auto_hide_timer.start(int(self._fs_auto_hide_ms))
+            if int(getattr(self, "_fs_auto_hide_cursor_ms", 0)) > 0:
+                self._cursor_hide_timer.start(int(self._fs_auto_hide_cursor_ms))
+        except Exception:
+            pass
+
+    def _hide_cursor_if_fullscreen(self) -> None:
+        if not self.is_fullscreen:
+            return
+        try:
+            self.setCursor(Qt.CursorShape.BlankCursor)
+            self.image_display_area.viewport().setCursor(Qt.CursorShape.BlankCursor)
+        except Exception:
+            pass
+
+    def _restore_cursor(self) -> None:
+        try:
+            self.unsetCursor()
+            self.image_display_area.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        except Exception:
+            pass
+
+    def _ensure_fs_overlays_created(self) -> None:
+        vp = self.image_display_area.viewport()
+        try:
+            if hasattr(self, 'button_bar') and self.button_bar and self.button_bar.parent() is not vp:
+                self.button_bar.setParent(vp)
+                try:
+                    self.button_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                except Exception:
+                    pass
+                self.button_bar.setStyleSheet("background-color: rgba(0,0,0,160);")
+                self.button_bar.raise_()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'filmstrip') and self.filmstrip and self.filmstrip.parent() is not vp:
+                self.filmstrip.setParent(vp)
+                try:
+                    # 기존 스타일 유지 + 뷰포트에만 반투명 배경 적용
+                    try:
+                        self.filmstrip.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                    except Exception:
+                        pass
+                    self.filmstrip.viewport().setStyleSheet("background-color: rgba(0,0,0,160);")
+                except Exception:
+                    pass
+                self.filmstrip.raise_()
+        except Exception:
+            pass
+
+    def _position_fullscreen_overlays(self) -> None:
+        if not self.is_fullscreen:
+            return
+        vp = self.image_display_area.viewport()
+        vw, vh = vp.width(), vp.height()
+        try:
+            if hasattr(self, 'button_bar') and self.button_bar:
+                h = int(self.button_bar.sizeHint().height())
+                y = 0 if bool(self._ui_chrome_visible) else -h
+                self.button_bar.setGeometry(0, y, vw, h)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'filmstrip') and self.filmstrip:
+                fh = int(max(1, self.filmstrip.sizeHint().height()))
+                y = (vh - fh) if (bool(self._ui_chrome_visible) and bool(getattr(self, "_fs_show_filmstrip_overlay", False))) else vh
+                self.filmstrip.setGeometry(0, y, vw, fh)
+        except Exception:
+            pass
+
+    def _animate_fs_overlay(self, show: bool) -> None:
+        if not self.is_fullscreen:
+            return
+        vp = self.image_display_area.viewport()
+        vw, vh = vp.width(), vp.height()
+        duration = 220
+        if hasattr(self, 'button_bar') and self.button_bar:
+            h = int(self.button_bar.sizeHint().height())
+            end_y = 0 if show else -h
+            try:
+                self._anim_toolbar.stop()
+            except Exception:
+                pass
+            # 반투명 배경이 누락되는 간헐 이슈 방지: 표시 직전에 재설정
+            try:
+                self.button_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                self.button_bar.setStyleSheet("background-color: rgba(0,0,0,160);")
+            except Exception:
+                pass
+            self._anim_toolbar = QPropertyAnimation(self.button_bar, b"pos", self)
+            self._anim_toolbar.setDuration(duration)
+            self._anim_toolbar.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._anim_toolbar.setStartValue(self.button_bar.pos())
+            self._anim_toolbar.setEndValue(QPoint(0, end_y))
+            try:
+                if show:
+                    self.button_bar.setVisible(True)
+                    self.button_bar.raise_()
+                else:
+                    # 애니메이션 종료 후 숨김
+                    self._anim_toolbar.finished.connect(lambda: self.button_bar.setVisible(False))
+            except Exception:
+                pass
+            self._anim_toolbar.start()
+        if hasattr(self, 'filmstrip') and self.filmstrip:
+            fh = int(max(1, self.filmstrip.sizeHint().height()))
+            end_y = (vh - fh) if (show and bool(getattr(self, "_fs_show_filmstrip_overlay", False))) else vh
+            try:
+                self._anim_filmstrip.stop()
+            except Exception:
+                pass
+            self._anim_filmstrip = QPropertyAnimation(self.filmstrip, b"pos", self)
+            self._anim_filmstrip.setDuration(duration)
+            self._anim_filmstrip.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._anim_filmstrip.setStartValue(self.filmstrip.pos())
+            self._anim_filmstrip.setEndValue(QPoint(0, end_y))
+            try:
+                if show and bool(getattr(self, "_fs_show_filmstrip_overlay", False)):
+                    self.filmstrip.setVisible(True)
+                    self.filmstrip.raise_()
+                elif not show:
+                    self._anim_filmstrip.finished.connect(lambda: self.filmstrip.setVisible(False))
+            except Exception:
+                pass
+            self._anim_filmstrip.start()
+
+    def _restore_overlays_to_layout(self) -> None:
+        try:
+            if hasattr(self, 'button_bar') and self.button_bar:
+                try:
+                    self.button_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+                except Exception:
+                    pass
+                self.button_bar.setStyleSheet("")
+                try:
+                    self.button_bar.setParent(self.centralWidget())
+                except Exception:
+                    self.button_bar.setParent(self)
+                try:
+                    self.main_layout.insertWidget(0, self.button_bar)
+                except Exception:
+                    pass
+                try:
+                    self.button_bar.update()
+                    self.button_bar.repaint()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'filmstrip') and self.filmstrip:
+                try:
+                    self.filmstrip.setStyleSheet("")
+                    try:
+                        self.filmstrip.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+                        self.filmstrip.viewport().setStyleSheet("")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                try:
+                    self.filmstrip.setParent(self.centralWidget())
+                except Exception:
+                    self.filmstrip.setParent(self)
+                try:
+                    self.main_layout.addWidget(self.filmstrip, 0)
+                except Exception:
+                    pass
+                try:
+                    self.filmstrip.update()
+                    self.filmstrip.repaint()
+                except Exception:
+                    pass
+        except Exception:
+            pass

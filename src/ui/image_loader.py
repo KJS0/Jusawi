@@ -11,12 +11,17 @@ if TYPE_CHECKING:
 
 
 def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> None:
-    # 새 이미지 적용 전에 변환 상태를 초기화하여 보기 모드 계산이 일관되게 되도록 함
-    try:
-        viewer._tf_rotation = 0
-        viewer._tf_flip_h = False
-        viewer._tf_flip_v = False
-    except Exception:
+    # 확대 상태 유지 정책에 따라 변환/보기 초기화 수준 결정
+    zoom_policy = str(getattr(viewer, "_zoom_policy", "mode"))
+    if zoom_policy == 'reset':
+        try:
+            viewer._tf_rotation = 0
+            viewer._tf_flip_h = False
+            viewer._tf_flip_v = False
+        except Exception:
+            pass
+    else:
+        # 회전/뒤집기는 유지. 배율/보기 모드는 하단에서 별도로 처리
         pass
     pixmap = QPixmap.fromImage(img)
     viewer.image_display_area.setPixmap(pixmap)
@@ -57,8 +62,19 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                 except Exception:
                     pass
                 try:
-                    viewer._movie.start()
-                    viewer._anim_is_playing = True
+                    # 루프 설정 반영: True(무한 루프=0), False(1회 재생=1)
+                    try:
+                        mv.setLoopCount(0 if bool(getattr(viewer, "_anim_loop", True)) else 1)
+                    except Exception:
+                        pass
+                    # 자동 재생 설정 반영
+                    if bool(getattr(viewer, "_anim_autoplay", True)):
+                        viewer._movie.start()
+                        viewer._anim_is_playing = True
+                    else:
+                        # 정지 상태 유지
+                        viewer._movie.stop()
+                        viewer._anim_is_playing = False
                 except Exception:
                     viewer._anim_is_playing = False
             except Exception:
@@ -90,29 +106,59 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                     already_listed = nc(path) in listed_set and nc(getattr(viewer, "_last_scanned_dir", "")) == nc(dirp)
             except Exception:
                 already_listed = False
-            # 동일 폴더이고 목록이 이미 최신이면 재스캔 생략(불필요한 대량 I/O 방지)
-            if not already_listed:
+            # 열기/드롭으로 들어온 경우에는 설정에 따라 자동 스캔 여부 결정
+            should_scan = True
+            try:
+                if source in ('open', 'drop') and not bool(getattr(viewer, "_open_scan_dir_after_open", True)):
+                    should_scan = False
+            except Exception:
+                should_scan = True
+            if should_scan and not already_listed:
                 viewer.scan_directory(dirp)
         except Exception:
             try:
-                viewer.scan_directory(os.path.dirname(path))
+                if should_scan:
+                    viewer.scan_directory(os.path.dirname(path))
             except Exception:
                 pass
     viewer.update_button_states()
     viewer.update_status_left()
     viewer.update_status_right()
-    # 변환 상태는 상단에서 초기화되었으므로, 현재 뷰에 반영
+    # 변환 상태는 정책에 따라 유지/초기화되었으므로, 현재 뷰에 반영
     viewer._apply_transform_to_view()
+    # 확대/보기 모드 적용: 정책에 따라 유지
     try:
-        pref = getattr(viewer, "_session_preferred_view_mode", None)
-        if pref == 'fit':
-            viewer.image_display_area.fit_to_window()
-        elif pref == 'fit_width':
-            viewer.image_display_area.fit_to_width()
-        elif pref == 'fit_height':
-            viewer.image_display_area.fit_to_height()
-        elif pref == 'actual':
-            viewer.image_display_area.reset_to_100()
+        if zoom_policy == 'reset':
+            pref = getattr(viewer, "_session_preferred_view_mode", None)
+            if pref == 'fit':
+                viewer.image_display_area.fit_to_window()
+            elif pref == 'fit_width':
+                viewer.image_display_area.fit_to_width()
+            elif pref == 'fit_height':
+                viewer.image_display_area.fit_to_height()
+            elif pref == 'actual':
+                viewer.image_display_area.reset_to_100()
+        elif zoom_policy == 'mode':
+            # 보기 모드 유지: 직전 모드를 반영
+            pref = getattr(viewer, "_last_view_mode", 'fit')
+            if pref == 'fit':
+                viewer.image_display_area.fit_to_window()
+            elif pref == 'fit_width':
+                viewer.image_display_area.fit_to_width()
+            elif pref == 'fit_height':
+                viewer.image_display_area.fit_to_height()
+            elif pref == 'actual':
+                viewer.image_display_area.reset_to_100()
+        elif zoom_policy == 'scale':
+            # 배율 유지: 직전 스케일을 그대로 적용
+            try:
+                prev_scale = float(getattr(viewer, "_last_scale", 1.0))
+            except Exception:
+                prev_scale = 1.0
+            if prev_scale and prev_scale > 0:
+                viewer.image_display_area.set_absolute_scale(prev_scale)
+        else:
+            pass
     except Exception:
         pass
     viewer._mark_dirty(False)
@@ -156,7 +202,11 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
             viewer.recent_files = update_mru(viewer.recent_files, path)
             parent_dir = os.path.dirname(path)
             if parent_dir and os.path.isdir(parent_dir):
-                viewer.last_open_dir = parent_dir
+                try:
+                    if bool(getattr(viewer, "_remember_last_open_dir", True)):
+                        viewer.last_open_dir = parent_dir
+                except Exception:
+                    viewer.last_open_dir = parent_dir
             viewer.save_settings()
             viewer.rebuild_recent_menu()
         except Exception:

@@ -109,7 +109,12 @@ def open_file(viewer: "JusawiViewer") -> None:
     try:
         parent_dir = os.path.dirname(file_path)
         if parent_dir and os.path.isdir(parent_dir):
-            viewer.last_open_dir = parent_dir
+            # 마지막 폴더 저장 정책 반영
+            try:
+                if bool(getattr(viewer, "_remember_last_open_dir", True)):
+                    viewer.last_open_dir = parent_dir
+            except Exception:
+                viewer.last_open_dir = parent_dir
             viewer.save_settings()
             try:
                 viewer.log.info("open_dialog_applied_last_dir | dir=%s", os.path.basename(parent_dir))

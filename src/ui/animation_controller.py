@@ -54,6 +54,11 @@ def toggle_play(viewer: "JusawiViewer") -> None:
         return
     try:
         if viewer._movie:
+            # 루프 설정이 바뀌었을 수 있으므로 매 토글 시 반영
+            try:
+                viewer._movie.setLoopCount(0 if bool(getattr(viewer, "_anim_loop", True)) else 1)
+            except Exception:
+                pass
             if viewer._movie.state() == QMovie.MovieState.Running:
                 viewer._movie.setPaused(True)
                 viewer._anim_is_playing = False
@@ -83,8 +88,9 @@ def on_tick(viewer: "JusawiViewer") -> None:
     try:
         cur = getattr(viewer.image_display_area, "_current_frame_index", 0)
         total = getattr(viewer.image_display_area, "_total_frames", -1)
+        loop = bool(getattr(viewer, "_anim_loop", True))
         if isinstance(total, int) and total > 1:
-            next_index = (cur + 1) % total
+            next_index = (cur + 1) % total if loop else min(total - 1, cur + 1)
         else:
             next_index = cur + 1
         img, ok, err = viewer.image_service.load_frame(viewer.current_image_path, next_index)
@@ -120,6 +126,28 @@ def on_movie_frame(viewer: "JusawiViewer", frame_index: int) -> None:
             viewer.image_display_area.updatePixmapFrame(pm)
             total = viewer._movie.frameCount()
             viewer.image_display_area.set_animation_state(True, frame_index, total)
+            # 루프 해제 시 마지막 프레임에서 정지
+            try:
+                if not bool(getattr(viewer, "_anim_loop", True)):
+                    # 우선 QMovie가 총 프레임을 알려줄 때
+                    if isinstance(total, int) and total > 0:
+                        if int(frame_index) >= int(total) - 1:
+                            try:
+                                viewer._movie.setPaused(True)
+                            except Exception:
+                                pass
+                            viewer._anim_is_playing = False
+                    else:
+                        # 총 프레임이 미상인 경우: 래핑 감지(이전 인덱스보다 작아지면 루프)
+                        prev = getattr(viewer.image_display_area, "_current_frame_index", 0)
+                        if int(frame_index) < int(prev):
+                            try:
+                                viewer._movie.setPaused(True)
+                            except Exception:
+                                pass
+                            viewer._anim_is_playing = False
+            except Exception:
+                pass
     except Exception:
         pass
 

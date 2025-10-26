@@ -175,6 +175,88 @@ def load_settings(viewer) -> None:
         viewer._ui_spacing = 6
         viewer._default_view_mode = "fit"
         viewer._remember_last_view_mode = True
+        # Open/Animation/Dir/TIFF 옵션 기본값 로드
+        try:
+            viewer._open_scan_dir_after_open = bool(viewer.settings.value("open/scan_dir_after_open", True, bool))
+        except Exception:
+            viewer._open_scan_dir_after_open = True
+        try:
+            viewer._remember_last_open_dir = bool(viewer.settings.value("open/remember_last_dir", True, bool))
+        except Exception:
+            viewer._remember_last_open_dir = True
+        try:
+            viewer._anim_autoplay = bool(viewer.settings.value("anim/autoplay", True, bool))
+        except Exception:
+            viewer._anim_autoplay = True
+        try:
+            viewer._anim_loop = bool(viewer.settings.value("anim/loop", True, bool))
+        except Exception:
+            viewer._anim_loop = True
+        try:
+            viewer._dir_sort_mode = viewer.settings.value("dir/sort_mode", "metadata", str)
+            if viewer._dir_sort_mode not in ("metadata", "name"):
+                viewer._dir_sort_mode = "metadata"
+        except Exception:
+            viewer._dir_sort_mode = "metadata"
+        try:
+            viewer._dir_natural_sort = bool(viewer.settings.value("dir/natural_sort", True, bool))
+        except Exception:
+            viewer._dir_natural_sort = True
+        try:
+            viewer._dir_exclude_hidden_system = bool(viewer.settings.value("dir/exclude_hidden_system", True, bool))
+        except Exception:
+            viewer._dir_exclude_hidden_system = True
+        try:
+            viewer._tiff_open_first_page_only = bool(viewer.settings.value("tiff/open_first_page_only", True, bool))
+        except Exception:
+            viewer._tiff_open_first_page_only = True
+        # Navigation/Filmstrip/Zoom 정책 추가
+        try:
+            viewer._nav_wrap_ends = bool(viewer.settings.value("nav/wrap_ends", False, bool))
+        except Exception:
+            viewer._nav_wrap_ends = False
+        try:
+            viewer._nav_min_interval_ms = int(viewer.settings.value("nav/min_interval_ms", 100))
+        except Exception:
+            viewer._nav_min_interval_ms = 100
+        try:
+            viewer._filmstrip_auto_center = bool(viewer.settings.value("ui/filmstrip_auto_center", True, bool))
+        except Exception:
+            viewer._filmstrip_auto_center = True
+        # 우선 정렬 키는 제거(메타데이터/파일명만 유지)
+        try:
+            viewer._zoom_policy = str(viewer.settings.value("view/zoom_policy", "mode", str))
+            if viewer._zoom_policy not in ("reset", "mode", "scale"):
+                viewer._zoom_policy = "mode"
+        except Exception:
+            viewer._zoom_policy = "mode"
+        # 전체화면/오버레이 관련
+        try:
+            viewer._fs_auto_hide_ms = int(viewer.settings.value("fullscreen/auto_hide_ms", 1500))
+        except Exception:
+            viewer._fs_auto_hide_ms = 1500
+        try:
+            viewer._fs_auto_hide_cursor_ms = int(viewer.settings.value("fullscreen/auto_hide_cursor_ms", 1200))
+        except Exception:
+            viewer._fs_auto_hide_cursor_ms = 1200
+        try:
+            viewer._fs_enter_view_mode = str(viewer.settings.value("fullscreen/enter_view_mode", "keep", str))
+            if viewer._fs_enter_view_mode not in ("keep", "fit", "fit_width", "fit_height", "actual"):
+                viewer._fs_enter_view_mode = "keep"
+        except Exception:
+            viewer._fs_enter_view_mode = "keep"
+        try:
+            viewer._fs_show_filmstrip_overlay = bool(viewer.settings.value("fullscreen/show_filmstrip_overlay", False, bool))
+        except Exception:
+            viewer._fs_show_filmstrip_overlay = False
+        try:
+            viewer._fs_safe_exit = bool(viewer.settings.value("fullscreen/safe_exit_rule", True, bool))
+        except Exception:
+            viewer._fs_safe_exit = True
+        try:
+            viewer._overlay_enabled_default = bool(viewer.settings.value("overlay/enabled_default", False, bool))
+        except Exception:
+            viewer._overlay_enabled_default = False
         # YAML 구성 로드 제거(롤백)
     except Exception:
         viewer.recent_files = []
@@ -196,6 +278,28 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("recent/last_open_dir", viewer.last_open_dir)
         viewer.settings.setValue("edit/save_policy", getattr(viewer, "_save_policy", "discard"))
         viewer.settings.setValue("edit/jpeg_quality", int(getattr(viewer, "_jpeg_quality", 95)))
+        # Open/Animation/Dir/TIFF 옵션 저장
+        viewer.settings.setValue("open/scan_dir_after_open", bool(getattr(viewer, "_open_scan_dir_after_open", True)))
+        viewer.settings.setValue("open/remember_last_dir", bool(getattr(viewer, "_remember_last_open_dir", True)))
+        viewer.settings.setValue("anim/autoplay", bool(getattr(viewer, "_anim_autoplay", True)))
+        viewer.settings.setValue("anim/loop", bool(getattr(viewer, "_anim_loop", True)))
+        viewer.settings.setValue("dir/sort_mode", str(getattr(viewer, "_dir_sort_mode", "metadata")))
+        viewer.settings.setValue("dir/natural_sort", bool(getattr(viewer, "_dir_natural_sort", True)))
+        viewer.settings.setValue("dir/exclude_hidden_system", bool(getattr(viewer, "_dir_exclude_hidden_system", True)))
+        viewer.settings.setValue("tiff/open_first_page_only", bool(getattr(viewer, "_tiff_open_first_page_only", True)))
+        # Navigation/Filmstrip/Zoom 정책 저장
+        viewer.settings.setValue("nav/wrap_ends", bool(getattr(viewer, "_nav_wrap_ends", False)))
+        viewer.settings.setValue("nav/min_interval_ms", int(getattr(viewer, "_nav_min_interval_ms", 100)))
+        viewer.settings.setValue("ui/filmstrip_auto_center", bool(getattr(viewer, "_filmstrip_auto_center", True)))
+        # dir/sort_primary 저장 제거
+        viewer.settings.setValue("view/zoom_policy", str(getattr(viewer, "_zoom_policy", "mode")))
+        # 전체화면/오버레이 관련 저장
+        viewer.settings.setValue("fullscreen/auto_hide_ms", int(getattr(viewer, "_fs_auto_hide_ms", 1500)))
+        viewer.settings.setValue("fullscreen/auto_hide_cursor_ms", int(getattr(viewer, "_fs_auto_hide_cursor_ms", 1200)))
+        viewer.settings.setValue("fullscreen/enter_view_mode", str(getattr(viewer, "_fs_enter_view_mode", "keep")))
+        viewer.settings.setValue("fullscreen/show_filmstrip_overlay", bool(getattr(viewer, "_fs_show_filmstrip_overlay", False)))
+        viewer.settings.setValue("fullscreen/safe_exit_rule", bool(getattr(viewer, "_fs_safe_exit", True)))
+        viewer.settings.setValue("overlay/enabled_default", bool(getattr(viewer, "_overlay_enabled_default", False)))
     except Exception:
         pass
 

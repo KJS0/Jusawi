@@ -59,6 +59,27 @@ def load_image_util(file_path, image_display_area):
     log.info("qpixmap_load_ok | file=%s | w=%d | h=%d", os.path.basename(file_path), int(pixmap.width()), int(pixmap.height()))
     return file_path, True
 
+def _is_hidden_or_system(path: str) -> bool:
+    try:
+        name = os.path.basename(path)
+        if name.startswith('.'):
+            return True
+        # Windows 시스템/숨김 속성 검사(가능한 경우)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                FILE_ATTRIBUTE_HIDDEN = 0x2
+                FILE_ATTRIBUTE_SYSTEM = 0x4
+                attrs = ctypes.windll.kernel32.GetFileAttributesW(ctypes.c_wchar_p(path))
+                if attrs != -1 and (attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)):
+                    return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return False
+
+
 def scan_directory_util(dir_path, current_image_path):
     image_files_in_dir = []
     current_image_index = -1
@@ -67,7 +88,7 @@ def scan_directory_util(dir_path, current_image_path):
 
     try:
         raw_files = os.listdir(dir_path)
-        # 1차: 파일명 정렬(Windows 논리 정렬 우선)
+        # 1차: 파일명 정렬(Windows 논리 정렬 우선) - 설정에 따라 자연/사전식 선택은 상위에서 처리 가능
         if strcmplogicalw_func:
             sorted_filenames = sorted(raw_files, key=functools.cmp_to_key(windows_style_sort_key))
         else:
@@ -80,14 +101,8 @@ def scan_directory_util(dir_path, current_image_path):
                 full = os.path.join(dir_path, fname)
                 temp_files.append(full)
 
-        # 2차: 정렬 키 계산 (Exif DateTimeOriginal -> mtime -> name)
-        def _sort_key(p: str):
-            try:
-                st = os.stat(p)
-                mtime = float(st.st_mtime)
-            except Exception:
-                mtime = 0.0
-            exif_ts = None
+        # 2차: 정렬 키 계산 (우선순위 기반: EXIF/mtime/name)
+        def _exif_ts(p: str):
             try:
                 # Pillow 기반 초경량 EXIF 추출 (실패 시 None)
                 from ..services.exif_utils import extract_with_pillow  # type: ignore
@@ -97,14 +112,26 @@ def scan_directory_util(dir_path, current_image_path):
                     y, mo, d = int(dt[0:4]), int(dt[5:7]), int(dt[8:10])
                     hh, mm, ss = int(dt[11:13]), int(dt[14:16]), int(dt[17:19])
                     import datetime
-                    exif_ts = datetime.datetime(y, mo, d, hh, mm, ss).timestamp()
+                    return datetime.datetime(y, mo, d, hh, mm, ss).timestamp()
             except Exception:
-                exif_ts = None
-            # 오름차순: 오래된 것 먼저
+                return None
+        def _mtime(p: str) -> float:
+            try:
+                st = os.stat(p)
+                return float(st.st_mtime)
+            except Exception:
+                return 0.0
+        def _name(p: str) -> str:
+            return os.path.basename(p).lower()
+        def _sort_key(p: str):
+            # 우선순위는 호출자(viewer)의 설정을 통해 services.image_service에서 재정렬되므로,
+            # 여기서는 기본(메타데이터 우선) 키 구성을 유지(폴백 로직도 포함)
+            exif_ts = _exif_ts(p)
+            mt = _mtime(p)
             return (
                 exif_ts if exif_ts is not None else float("inf"),
-                mtime if exif_ts is None else 0.0,
-                os.path.basename(p).lower(),
+                mt if exif_ts is None else 0.0,
+                _name(p),
             )
 
         try:

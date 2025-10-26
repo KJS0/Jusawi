@@ -43,6 +43,7 @@ def build_top_and_status_bars(viewer) -> None:
 
     viewer.fullscreen_button = QPushButton("전체화면")
     viewer.fullscreen_button.clicked.connect(viewer.toggle_fullscreen)
+    # 이미지 더블클릭은 ImageView의 기본 동작(화면 맞춤 ↔ 100%)을 사용합니다.
 
     viewer.prev_button = QPushButton("이전")
     viewer.next_button = QPushButton("다음")

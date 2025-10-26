@@ -153,7 +153,70 @@ class ImageService(QObject):
             pass
 
     def scan_directory(self, dir_path: str, current_image_path: str | None):
-        return scan_directory_util(dir_path, current_image_path)
+        image_files, cur_idx = scan_directory_util(dir_path, current_image_path)
+        # 뷰어 설정(정렬/숨김/자연정렬)에 따른 후처리 훅: 호출자가 속성 제공 시 적용
+        try:
+            owner = getattr(self, 'parent', None)
+        except Exception:
+            owner = None
+        try:
+            viewer = owner if owner is not None else None
+            # 숨김/시스템 제외
+            if viewer is not None and bool(getattr(viewer, "_dir_exclude_hidden_system", True)):
+                def _is_hidden(p: str) -> bool:
+                    try:
+                        name = os.path.basename(p)
+                        if name.startswith('.'):
+                            return True
+                        if os.name == 'nt':
+                            try:
+                                import ctypes
+                                FILE_ATTRIBUTE_HIDDEN = 0x2
+                                FILE_ATTRIBUTE_SYSTEM = 0x4
+                                attrs = ctypes.windll.kernel32.GetFileAttributesW(ctypes.c_wchar_p(p))
+                                if attrs != -1 and (attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)):
+                                    return True
+                            except Exception:
+                                return False
+                        return False
+                    except Exception:
+                        return False
+                image_files = [p for p in image_files if not _is_hidden(p)]
+            # 정렬 방식 적용
+            sort_mode = str(getattr(viewer, "_dir_sort_mode", "metadata")) if viewer is not None else "metadata"
+            natural = bool(getattr(viewer, "_dir_natural_sort", True)) if viewer is not None else True
+            if sort_mode == 'name':
+                try:
+                    if natural and os.name == 'nt':
+                        # Windows 자연 정렬
+                        from ..utils.file_utils import windows_style_sort_key
+                        image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
+                        try:
+                            # 이름만으로 비교하는 자연 정렬 적용을 위해 cmp 형태 사용
+                            import functools
+                            image_files = sorted(image_files, key=functools.cmp_to_key(lambda a,b: windows_style_sort_key(os.path.basename(a), os.path.basename(b))))
+                        except Exception:
+                            pass
+                    else:
+                        image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
+                except Exception:
+                    pass
+            else:
+                # 메타데이터 모드: file_utils에서 기본(EXIF 우선) 정렬 적용됨
+                image_files = list(image_files)
+            # 현재 인덱스 재계산
+            try:
+                if current_image_path and image_files:
+                    nc = os.path.normcase
+                    try:
+                        cur_idx = [nc(p) for p in image_files].index(nc(current_image_path))
+                    except ValueError:
+                        cur_idx = 0 if image_files else -1
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return image_files, cur_idx
 
     def load(self, path: str) -> Tuple[str, QImage | None, bool, str]:
         # 캐시 히트 시 즉시 반환
@@ -406,6 +469,29 @@ class ImageService(QObject):
         # 저장 스레드 종료
         try:
             self.cancel_save()
+        except Exception:
+            pass
+
+    def clear_all_caches(self) -> None:
+        """이미지/스케일/애니메이션 관련 모든 캐시를 초기화한다."""
+        try:
+            if hasattr(self, "_img_cache") and self._img_cache is not None:
+                self._img_cache.clear()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_scaled_cache") and self._scaled_cache is not None:
+                self._scaled_cache.clear()
+        except Exception:
+            pass
+        try:
+            if isinstance(getattr(self, "_anim_frame_count", None), dict):
+                self._anim_frame_count.clear()
+        except Exception:
+            pass
+        try:
+            # 프리로드 세대 초기화
+            self._preload_generation = int(self._preload_generation) + 1
         except Exception:
             pass
 

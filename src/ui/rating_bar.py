@@ -5,6 +5,7 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt  # type: ignore[import]
 from PyQt6.QtWidgets import QLabel, QPushButton  # type: ignore[import]
+from PyQt6.QtCore import QTimer  # type: ignore[import]
 
 from ..services.ratings_store import get_image as ratings_get_image, upsert_image as ratings_upsert_image  # type: ignore
 
@@ -167,14 +168,14 @@ def set_rating(owner, n: int) -> None:
         if not (0 <= owner.current_image_index < len(owner.image_files_in_dir)):
             return
         path = owner.image_files_in_dir[owner.current_image_index]
-        # 토글 동작: 현재 평점과 동일한 별을 누르면 0점으로 해제
+        # 토글 금지: 같은 점수를 다시 눌러도 유지
         try:
             row_cur = ratings_get_image(path) or {}
             cur_rating = int(row_cur.get("rating", 0))
         except Exception:
             cur_rating = 0
         req = int(n)
-        new_rating = 0 if req == cur_rating else req
+        new_rating = req
         try:
             st = os.stat(path)
             mt = int(st.st_mtime)
@@ -190,6 +191,11 @@ def set_rating(owner, n: int) -> None:
         except Exception:
             pass
         refresh(owner)
+        try:
+            stars = ("★" * max(0, new_rating)) + ("☆" * max(0, 5 - max(0, new_rating))) if new_rating > 0 else "☆☆☆☆☆"
+            _show_center_toast(owner, stars)
+        except Exception:
+            pass
         # 이벤트 루프 다음 틱에도 한 번 더 반영(스타일/페인트 타이밍 보강)
         try:
             from PyQt6.QtCore import QTimer  # type: ignore[import]
@@ -215,11 +221,9 @@ def set_flag(owner, f: str) -> None:
         except Exception:
             mt = 0
         row = ratings_get_image(path) or {}
-        # 동일 플래그를 누르면 unflagged로 토글
+        # 동일 플래그를 눌러도 '미설정'으로 토글하지 않음(요청사항)
         cur_flag = (row.get("flag") if row else None) or 'unflagged'
         target = f
-        if str(cur_flag).strip().lower() == str(f).strip().lower():
-            target = 'unflagged'
 
         if target == 'rejected':
             cur_rating = int(row.get("rating", 0)) if row else 0
@@ -233,6 +237,10 @@ def set_flag(owner, f: str) -> None:
                 pass
             refresh(owner)
             try:
+                _show_center_toast(owner, "거부")
+            except Exception:
+                pass
+            try:
                 from PyQt6.QtCore import QTimer  # type: ignore[import]
                 QTimer.singleShot(0, lambda: refresh(owner))
             except Exception:
@@ -245,6 +253,10 @@ def set_flag(owner, f: str) -> None:
             except Exception:
                 pass
             refresh(owner)
+            try:
+                _show_center_toast(owner, "승낙")
+            except Exception:
+                pass
             try:
                 from PyQt6.QtCore import QTimer  # type: ignore[import]
                 QTimer.singleShot(0, lambda: refresh(owner))
@@ -261,6 +273,10 @@ def set_flag(owner, f: str) -> None:
                 pass
             refresh(owner)
             try:
+                _show_center_toast(owner, "미설정")
+            except Exception:
+                pass
+            try:
                 from PyQt6.QtCore import QTimer  # type: ignore[import]
                 QTimer.singleShot(0, lambda: refresh(owner))
             except Exception:
@@ -269,3 +285,73 @@ def set_flag(owner, f: str) -> None:
         pass
 
 
+
+def _show_center_toast(owner, text: str) -> None:
+    try:
+        from PyQt6.QtWidgets import QLabel  # type: ignore[import]
+        from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, Qt  # type: ignore[import]
+        # 전체화면에서만 토스트 표시
+        if not bool(getattr(owner, "is_fullscreen", False)):
+            return
+        vp = owner.image_display_area.viewport()
+        # 기존 토스트가 표시 중이면 즉시 중단하고 새 텍스트로 교체
+        try:
+            if getattr(owner, "_toast_anim", None) is not None:
+                owner._toast_anim.stop()
+        except Exception:
+            pass
+        try:
+            if getattr(owner, "_toast_timer_clear", None) is not None:
+                owner._toast_timer_clear.stop()
+        except Exception:
+            pass
+        if getattr(owner, "_center_toast", None) is None:
+            owner._center_toast = QLabel(vp)
+            owner._center_toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            owner._center_toast.setStyleSheet("background-color: rgba(0,0,0,160); color: #FFFFFF; padding: 14px 18px; border-radius: 6px; font-size: 22px; font-weight: 600;")
+        # 불투명도 효과를 항상 1.0으로 리셋
+        try:
+            eff = owner._center_toast.graphicsEffect()
+        except Exception:
+            eff = None
+        if eff is None:
+            from PyQt6.QtWidgets import QGraphicsOpacityEffect  # type: ignore[import]
+            eff = QGraphicsOpacityEffect(owner._center_toast)
+            owner._center_toast.setGraphicsEffect(eff)
+        try:
+            eff.setOpacity(1.0)
+        except Exception:
+            pass
+        owner._center_toast.setText(text)
+        owner._center_toast.adjustSize()
+        w = owner._center_toast.width(); h = owner._center_toast.height()
+        vw, vh = vp.width(), vp.height()
+        owner._center_toast.setGeometry(int((vw - w)/2), int(vh - h - max(24, vh * 0.08)), w, h)
+        owner._center_toast.setVisible(True)
+        try:
+            owner._center_toast.raise_()
+        except Exception:
+            pass
+        # 2초 유지 후 페이드아웃 (지연 중 새 요청이 오면 기존 타이머 취소)
+        def _fade():
+            try:
+                eff = owner._center_toast.graphicsEffect()
+            except Exception:
+                eff = None
+            if eff is None:
+                from PyQt6.QtWidgets import QGraphicsOpacityEffect  # type: ignore[import]
+                eff = QGraphicsOpacityEffect(owner._center_toast)
+                owner._center_toast.setGraphicsEffect(eff)
+            owner._toast_anim = QPropertyAnimation(eff, b"opacity", owner)
+            owner._toast_anim.setDuration(600)
+            owner._toast_anim.setStartValue(1.0)
+            owner._toast_anim.setEndValue(0.0)
+            owner._toast_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            owner._toast_anim.finished.connect(lambda: owner._center_toast.setVisible(False))
+            owner._toast_anim.start()
+        owner._toast_timer_clear = QTimer(owner)
+        owner._toast_timer_clear.setSingleShot(True)
+        owner._toast_timer_clear.timeout.connect(_fade)
+        owner._toast_timer_clear.start(2000)
+    except Exception:
+        pass

@@ -89,6 +89,10 @@ class ThumbCache:
         except Exception:
             pass
 
+    def clear(self) -> None:
+        with self._lock:
+            self._mem.clear()
+
 
 ## EXIF 메타는 필름 스트립에서 사용하지 않음(썸네일/경로만)
 
@@ -369,6 +373,7 @@ class FilmstripView(QListView):
         self.setUniformItemSizes(True)
         self.setSelectionMode(QListView.SelectionMode.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         # 초기 테마 적용은 부모 뷰어의 _resolved_theme를 참조하여 동적으로 설정됨
         try:

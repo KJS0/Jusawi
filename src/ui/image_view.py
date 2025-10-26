@@ -485,6 +485,14 @@ class ImageView(QGraphicsView):
                 self.centerOn(new_scene_point)
             except Exception:
                 pass
+        # 전체화면 오버레이 위치 업데이트
+        try:
+            win = self.window()
+            # 순환 import 회피: 메서드 존재 여부로 확인
+            if hasattr(win, "_position_fullscreen_overlays"):
+                win._position_fullscreen_overlays()
+        except Exception:
+            pass
 
     def mouseDoubleClickEvent(self, event):
         # 더블클릭: 화면 맞춤 ↔ 실제 크기 토글
