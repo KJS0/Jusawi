@@ -4,7 +4,7 @@ import os
 from typing import TYPE_CHECKING
 from PyQt6.QtGui import QPixmap, QMovie  # type: ignore[import]
 
-from ..storage.mru_store import update_mru
+from ..storage.mru_store import update_mru, process_mru
 
 if TYPE_CHECKING:
     from .main_window import JusawiViewer
@@ -195,6 +195,14 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
         preload_neighbors(viewer)
     except Exception:
         pass
+    # 첫 이미지 로드 시 보조 UI 표시
+    try:
+        if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None:
+            viewer.filmstrip.setVisible(True)
+        if hasattr(viewer, '_rating_flag_bar') and viewer._rating_flag_bar is not None:
+            viewer._rating_flag_bar.setVisible(True)
+    except Exception:
+        pass
     # 자동화: AI 분석 자동 실행
     try:
         if bool(getattr(viewer, "_auto_ai_on_open", False)) and (source in ("open", "drop", "nav")):
@@ -211,9 +219,21 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                 QTimer.singleShot(0, _run_ai)
     except Exception:
         pass
-    if source in ('open', 'drop'):
+    if source in ('open', 'drop', 'nav'):
         try:
             viewer.recent_files = update_mru(viewer.recent_files, path)
+            # MRU 후처리: 최대 개수/제외/핀/자동 정리 적용
+            try:
+                max_items = int(getattr(viewer, "_recent_max_items", 10))
+            except Exception:
+                max_items = 10
+            viewer.recent_files = process_mru(
+                viewer.recent_files,
+                max_items=max_items,
+                exclude_patterns=str(getattr(viewer, "_recent_exclude_patterns", "")),
+                auto_prune_missing=bool(getattr(viewer, "_recent_auto_prune_missing", True)),
+                is_folder=False,
+            )
             parent_dir = os.path.dirname(path)
             if parent_dir and os.path.isdir(parent_dir):
                 try:

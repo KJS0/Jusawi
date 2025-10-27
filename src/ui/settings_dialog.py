@@ -27,9 +27,14 @@ class SettingsDialog(QDialog):
 
 
         # ----- 일반 탭 -----
+        from PyQt6.QtWidgets import QScrollArea  # type: ignore[import]
         self.general_tab = QWidget(self)
-        self.tabs.addTab(self.general_tab, "일반")
-        gen_layout = QVBoxLayout(self.general_tab)
+        self._general_scroll = QScrollArea(self)
+        self._general_scroll.setWidgetResizable(True)
+        self._general_container = QWidget(self)
+        self._general_scroll.setWidget(self._general_container)
+        self.tabs.addTab(self._general_scroll, "일반")
+        gen_layout = QVBoxLayout(self._general_container)
         try:
             gen_layout.setContentsMargins(8, 8, 8, 8)
             gen_layout.setSpacing(8)
@@ -41,6 +46,22 @@ class SettingsDialog(QDialog):
         self.chk_remember_last_dir = QCheckBox("마지막 사용 폴더 기억", self.general_tab)
         gen_layout.addWidget(self.chk_scan_after_open)
         gen_layout.addWidget(self.chk_remember_last_dir)
+
+        # 세션/최근 목록 옵션
+        gen_layout.addWidget(QLabel("세션/최근", self.general_tab))
+        self.combo_startup_restore = QComboBox(self.general_tab)
+        self.combo_startup_restore.addItems(["항상 복원", "묻기", "복원 안 함"])  # always/ask/never
+        self.spin_recent_max = QSpinBox(self.general_tab); self.spin_recent_max.setRange(1, 100); self.spin_recent_max.setSuffix(" 개")
+        self.chk_recent_auto_prune = QCheckBox("존재하지 않는 항목 자동 정리", self.general_tab)
+        from PyQt6.QtWidgets import QLineEdit  # type: ignore[import]
+        self.ed_recent_exclude = QLineEdit(self.general_tab)
+        self.ed_recent_exclude.setPlaceholderText("예: C:/Temp; \\server\\share; node_modules")
+        form_recent = QFormLayout()
+        form_recent.addRow("시작 시 세션 복원", self.combo_startup_restore)
+        form_recent.addRow("최근 목록 최대 개수", self.spin_recent_max)
+        # 제외 규칙 UI 삭제
+        form_recent.addRow("존재하지 않음 자동 정리", self.chk_recent_auto_prune)
+        gen_layout.addLayout(form_recent)
 
         # 애니메이션
         gen_layout.addWidget(QLabel("애니메이션", self.general_tab))
@@ -126,6 +147,7 @@ class SettingsDialog(QDialog):
 
         # 단축키 탭 제거
         self._keys_ready = False
+        # 단축키 입력부(키 설정) 섹션 제거 유지 — 별도 탭/대화에서만 다루도록 고정
 
         # ----- 보기 탭 -----
         self.view_tab = QWidget(self)
@@ -244,6 +266,49 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
+        # 스크롤 영역/레이아웃 구성 이후, 휠 가드용 필터 설치 준비
+        try:
+            self._wheel_guard_targets = []
+        except Exception:
+            self._wheel_guard_targets = []
+        # 일반 탭 구성 마지막에 각 입력 위젯을 휠가드 대상으로 등록
+        try:
+            for w in [
+                self.spin_recent_max,
+                self.combo_startup_restore,
+                self.chk_recent_auto_prune,
+                self.chk_scan_after_open,
+                self.chk_remember_last_dir,
+                self.chk_anim_autoplay,
+                self.chk_anim_loop,
+                self.combo_sort_mode,
+                self.combo_sort_name,
+                self.chk_exclude_hidden,
+                self.chk_wrap_ends,
+                self.spin_nav_throttle,
+                self.chk_film_center,
+                self.combo_zoom_policy,
+                self.chk_drop_allow_folder,
+                self.chk_drop_parent_scan,
+                self.chk_drop_overlay,
+                self.chk_drop_confirm,
+                self.spin_drop_threshold,
+                self.chk_prefetch_thumbs,
+                self.spin_preload_radius,
+                self.chk_prefetch_map,
+                self.chk_ai_auto,
+                self.spin_ai_delay,
+                self.chk_tiff_first_page,
+            ]:
+                if w:
+                    try:
+                        w.installEventFilter(self)
+                        self._wheel_guard_targets.append(w)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     # 외부에서 호출: 단축키 탭으로 전환하고 첫 편집기로 포커스 이동
     def focus_shortcuts_tab(self):
         try:
@@ -287,6 +352,21 @@ class SettingsDialog(QDialog):
             self.chk_anim_loop.setChecked(bool(getattr(viewer, "_anim_loop", True)))
         except Exception:
             self.chk_anim_loop.setChecked(True)
+        # 세션/최근 로드
+        try:
+            pol = str(getattr(viewer, "_startup_restore_policy", "always"))
+            self.combo_startup_restore.setCurrentIndex({"always":0, "ask":1, "never":2}.get(pol, 0))
+        except Exception:
+            self.combo_startup_restore.setCurrentIndex(0)
+        try:
+            self.spin_recent_max.setValue(int(getattr(viewer, "_recent_max_items", 10)))
+        except Exception:
+            self.spin_recent_max.setValue(10)
+        try:
+            self.chk_recent_auto_prune.setChecked(bool(getattr(viewer, "_recent_auto_prune_missing", True)))
+        except Exception:
+            self.chk_recent_auto_prune.setChecked(True)
+        # 제외 규칙 삭제됨 — 로드 없음
         try:
             mode = str(getattr(viewer, "_dir_sort_mode", "metadata"))
             self.combo_sort_mode.setCurrentIndex(0 if mode == "metadata" else 1)
@@ -490,6 +570,17 @@ class SettingsDialog(QDialog):
             viewer._anim_loop = bool(self.chk_anim_loop.isChecked())
         except Exception:
             pass
+        # 세션/최근 저장
+        try:
+            pol_idx = int(self.combo_startup_restore.currentIndex())
+            viewer._startup_restore_policy = ("always" if pol_idx == 0 else ("ask" if pol_idx == 1 else "never"))
+        except Exception:
+            pass
+        try:
+            viewer._recent_max_items = int(self.spin_recent_max.value())
+        except Exception:
+            pass
+        # 제외 규칙 삭제됨 — 저장 없음
         try:
             viewer._dir_sort_mode = "metadata" if int(self.combo_sort_mode.currentIndex()) == 0 else "name"
         except Exception:
@@ -1007,23 +1098,31 @@ class SettingsDialog(QDialog):
     # 이벤트 필터: 배타 포커스 + Backspace/Delete로 해제 지원
     def eventFilter(self, obj, event):
         try:
+            from PyQt6.QtCore import QEvent  # type: ignore
+            et = event.type()
+            # 키 시퀀스 에디터 기존 로직 유지
             if isinstance(obj, QKeySequenceEdit):
-                if event.type() == QEvent.Type.FocusIn:
-                    # 다른 에디터 포커스 제거
+                if et == QEvent.Type.FocusIn:
                     for ed in getattr(self, "_key_editors", []) or []:
                         if ed is not obj and ed.hasFocus():
                             try:
                                 ed.clearFocus()
                             except Exception:
                                 pass
-                elif event.type() == QEvent.Type.KeyPress:
+                elif et == QEvent.Type.KeyPress:
                     key = getattr(event, 'key', None)
-                    # Backspace/Delete 처리: 키 해제
-                    if key and int(key()) in (0x01000003, 0x01000007):  # Qt.Key_Backspace, Qt.Key_Delete
+                    if key and int(key()) in (0x01000003, 0x01000007):  # Backspace/Delete
                         obj.setKeySequence(QKeySequence())
                         meta = getattr(self, "_editor_meta", {}).get(obj, None)
                         if meta is not None:
                             self._on_key_changed(obj, meta.get("defaults", []), int(meta.get("row", 0)))
+                        return True
+                return super().eventFilter(obj, event)
+            # 휠 가드: 포커스 없는 경우 스핀/콤보/체크는 값 변경 금지
+            if et == QEvent.Type.Wheel:
+                from PyQt6.QtWidgets import QAbstractSpinBox, QComboBox, QCheckBox  # type: ignore
+                if isinstance(obj, (QAbstractSpinBox, QComboBox, QCheckBox)):
+                    if not obj.hasFocus():
                         return True
         except Exception:
             pass

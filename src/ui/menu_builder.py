@@ -4,12 +4,19 @@ from PyQt6.QtGui import QAction
 
 def rebuild_recent_menu(viewer) -> None:
     viewer.recent_menu.clear()
+    # 존재하지 않는 항목 자동 정리 옵션 반영
+    try:
+        auto_prune = bool(getattr(viewer, "_recent_auto_prune_missing", True))
+    except Exception:
+        auto_prune = True
     # 최근 파일
     if getattr(viewer, "recent_files", None):
         from PyQt6.QtWidgets import QMenu  # type: ignore[import]
         files_menu = QMenu("최근 파일", viewer)
-        for item in viewer.recent_files:
+        for idx, item in enumerate(viewer.recent_files):
             path = item.get("path") if isinstance(item, dict) else str(item)
+            if auto_prune and (not path or not os.path.isfile(path)):
+                continue
             act = QAction(os.path.basename(path), viewer)
             act.setToolTip(path)
             act.triggered.connect(lambda _, p=path: viewer.load_image(p, source='recent'))
@@ -21,6 +28,8 @@ def rebuild_recent_menu(viewer) -> None:
         folders_menu = QMenu("최근 폴더", viewer)
         for item in viewer.recent_folders:
             dirp = item.get("path") if isinstance(item, dict) else str(item)
+            if auto_prune and (not dirp or not os.path.isdir(dirp)):
+                continue
             act = QAction(os.path.basename(dirp.rstrip("/\\")) or dirp, viewer)
             act.setToolTip(dirp)
             act.triggered.connect(lambda _, d=dirp: viewer._open_recent_folder(d))
@@ -32,6 +41,13 @@ def rebuild_recent_menu(viewer) -> None:
     clear_act = QAction("지우기", viewer)
     clear_act.triggered.connect(viewer.clear_recent)
     viewer.recent_menu.addAction(clear_act)
+
+    # 최근 항목 없으면 비활성화
+    has_any = bool(getattr(viewer, "recent_files", None) or getattr(viewer, "recent_folders", None))
+    try:
+        clear_act.setEnabled(has_any)
+    except Exception:
+        pass
 
 
 def rebuild_log_menu(viewer) -> None:

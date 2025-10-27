@@ -20,6 +20,7 @@ from . import history as hist
 from ..utils.file_utils import open_file_dialog_util, cleanup_leftover_temp_and_backup
 from ..utils.delete_utils import move_to_trash_windows
 from ..storage.mru_store import normalize_path, update_mru
+from ..storage.mru_store import process_mru
 from .z_dnd_bridge import handle_dropped_files as dnd_handle_files
 from .z_dnd_bridge import handle_dropped_folders as dnd_handle_folders
 from .z_dnd_bridge import drag_enter as dnd_drag_enter, drag_move as dnd_drag_move, drop as dnd_drop
@@ -220,6 +221,11 @@ class JusawiViewer(QMainWindow):
             pass
         # 하단 필름 스트립을 고정 배치로 롤백
         self.main_layout.addWidget(self.filmstrip, 0)
+        try:
+            # 시작 시에는 이미지가 없으므로 보이지 않게
+            self.filmstrip.setVisible(False)
+        except Exception:
+            pass
         # 전체 캐시 리셋 시 썸네일 메모리도 함께 초기화할 수 있도록 핸들러 제공
         try:
             self._clear_filmstrip_cache = lambda: getattr(self.filmstrip, "_cache", None) and self.filmstrip._cache.clear()
@@ -229,6 +235,12 @@ class JusawiViewer(QMainWindow):
         # 필름 스트립 컨트롤 바(별점/플래그)
         try:
             rating_bar.create(self)
+        except Exception:
+            pass
+        # 시작 시 평점 바 숨김
+        try:
+            if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                self._rating_flag_bar.setVisible(False)
         except Exception:
             pass
 
@@ -448,6 +460,19 @@ class JusawiViewer(QMainWindow):
     def clear_recent(self):
         self.recent_files = []
         self.recent_folders = []
+        self.save_settings()
+        self.rebuild_recent_menu()
+
+    # 옵션: 존재하지 않는 항목을 한 번에 정리
+    def prune_missing_from_recent(self):
+        try:
+            self.recent_files = [it for it in (self.recent_files or []) if os.path.isfile(it.get("path", "") if isinstance(it, dict) else str(it))]
+        except Exception:
+            pass
+        try:
+            self.recent_folders = [it for it in (self.recent_folders or []) if os.path.isdir(it.get("path", "") if isinstance(it, dict) else str(it))]
+        except Exception:
+            pass
         self.save_settings()
         self.rebuild_recent_menu()
 
@@ -736,6 +761,44 @@ class JusawiViewer(QMainWindow):
         except Exception:
             pass
 
+    # ----- 최근 파일 빠른 실행 핸들러 (Alt+1..9) -----
+    def _open_recent_by_index(self, idx: int) -> None:
+        try:
+            items = getattr(self, "recent_files", []) or []
+            if not items:
+                return
+            if 0 <= idx < len(items):
+                it = items[idx]
+                path = it.get("path") if isinstance(it, dict) else str(it)
+                if path:
+                    self.load_image(path, source='recent')
+        except Exception:
+            pass
+
+    def _open_recent_1(self): self._open_recent_by_index(0)
+    def _open_recent_2(self): self._open_recent_by_index(1)
+    def _open_recent_3(self): self._open_recent_by_index(2)
+    def _open_recent_4(self): self._open_recent_by_index(3)
+    def _open_recent_5(self): self._open_recent_by_index(4)
+    def _open_recent_6(self): self._open_recent_by_index(5)
+    def _open_recent_7(self): self._open_recent_by_index(6)
+    def _open_recent_8(self): self._open_recent_by_index(7)
+    def _open_recent_9(self): self._open_recent_by_index(8)
+
+    # 마지막 닫은 이미지 다시 열기
+    def reopen_last_closed_image(self) -> None:
+        try:
+            path = getattr(self, "_last_closed_image_path", "") or ""
+            if path and os.path.isfile(path):
+                self.load_image(path, source='reopen')
+            else:
+                try:
+                    self.statusBar().showMessage("다시 열 수 있는 이미지가 없습니다.", 2000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # 보기 공유 토글 제거
 
     # ----- 사용자 요청 단축키 핸들러 -----
@@ -937,6 +1000,12 @@ class JusawiViewer(QMainWindow):
 
     def delete_current_image(self):
         file_cmd.delete_current_image(self)
+        try:
+            # 삭제 직전의 경로를 마지막 닫은 이미지 힌트로 보관
+            if getattr(self, "current_image_path", None):
+                self._last_closed_image_path = self.current_image_path
+        except Exception:
+            pass
 
     # 삭제 기능은 delete_utils로 분리됨
     def _undo_last_delete(self):
@@ -1078,6 +1147,14 @@ class JusawiViewer(QMainWindow):
                 self.current_image_index = row
                 self.load_image_at_current_index()
                 try:
+                    # 파일 선택으로 이미지가 로드되었으니 필름스트립/평점바 표시
+                    if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                        self.filmstrip.setVisible(True)
+                    if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                        self._rating_flag_bar.setVisible(True)
+                except Exception:
+                    pass
+                try:
                     # 자동 스크롤(중앙 정렬) — 설정에 따라 수행
                     self.filmstrip.set_current_index(row)
                     try:
@@ -1103,6 +1180,13 @@ class JusawiViewer(QMainWindow):
             nav_load_image_at_current_index(self)
         try:
             rating_bar.refresh(self)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                self.filmstrip.setVisible(True)
+            if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                self._rating_flag_bar.setVisible(True)
         except Exception:
             pass
 

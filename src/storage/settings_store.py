@@ -220,6 +220,20 @@ def load_settings(viewer) -> None:
             viewer._remember_last_open_dir = bool(viewer.settings.value("open/remember_last_dir", True, bool))
         except Exception:
             viewer._remember_last_open_dir = True
+        # 최근/세션 옵션 로드
+        try:
+            viewer._startup_restore_policy = str(viewer.settings.value("session/startup_restore_policy", "always", str))
+        except Exception:
+            viewer._startup_restore_policy = "always"
+        try:
+            viewer._recent_max_items = int(viewer.settings.value("recent/max_items", 10))
+        except Exception:
+            viewer._recent_max_items = 10
+        # 제외 규칙 삭제됨
+        try:
+            viewer._recent_auto_prune_missing = bool(viewer.settings.value("recent/auto_prune_missing", True, bool))
+        except Exception:
+            viewer._recent_auto_prune_missing = True
         try:
             viewer._anim_autoplay = bool(viewer.settings.value("anim/autoplay", True, bool))
         except Exception:
@@ -406,6 +420,11 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("recent/files", viewer.recent_files)
         viewer.settings.setValue("recent/folders", viewer.recent_folders)
         viewer.settings.setValue("recent/last_open_dir", viewer.last_open_dir)
+        # 최근/세션 옵션 저장
+        viewer.settings.setValue("session/startup_restore_policy", str(getattr(viewer, "_startup_restore_policy", "always")))
+        viewer.settings.setValue("recent/max_items", int(getattr(viewer, "_recent_max_items", 10)))
+        # 제외 규칙 저장 없음
+        viewer.settings.setValue("recent/auto_prune_missing", bool(getattr(viewer, "_recent_auto_prune_missing", True)))
         viewer.settings.setValue("edit/save_policy", getattr(viewer, "_save_policy", "discard"))
         viewer.settings.setValue("edit/jpeg_quality", int(getattr(viewer, "_jpeg_quality", 95)))
         # Open/Animation/Dir/TIFF 옵션 저장

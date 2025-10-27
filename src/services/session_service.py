@@ -20,6 +20,12 @@ def save_last_session(viewer) -> None:
 
 def restore_last_session(viewer) -> None:
     try:
+        # 시작 시 복원 정책: always/ask/never
+        policy = str(getattr(viewer, "_startup_restore_policy", "always"))
+        if policy not in ("always", "ask", "never"):
+            policy = "always"
+        if policy == "never":
+            return
         last = viewer.settings.value("session/last", {}, dict)
         if not isinstance(last, dict):
             return
@@ -46,7 +52,21 @@ def restore_last_session(viewer) -> None:
                     pass
         elif fpath and os.path.isfile(fpath):
             # 폴더 정보가 없을 때만 단일 파일 복원
+            # 묻기 정책이면 확인
+            if policy == "ask":
+                try:
+                    from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+                    r = QMessageBox.question(viewer, "세션 복원", f"마지막 파일을 다시 열까요?\n{fpath}")
+                    if r != QMessageBox.StandardButton.Yes:
+                        return
+                except Exception:
+                    pass
             viewer.load_image(fpath, source='restore')
+            try:
+                # 힌트 업데이트: 마지막 닫은 이미지 = 방금 복원한 파일
+                viewer._last_closed_image_path = fpath
+            except Exception:
+                pass
             try:
                 from ..ui import rating_bar  # type: ignore
                 rating_bar.refresh(viewer)
@@ -59,7 +79,19 @@ def restore_last_session(viewer) -> None:
                 if recent:
                     first_path = recent[0].get("path") if isinstance(recent[0], dict) else str(recent[0])
                     if first_path and os.path.isfile(first_path):
+                        if policy == "ask":
+                            try:
+                                from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+                                r = QMessageBox.question(viewer, "세션 복원", f"최근 파일을 다시 열까요?\n{first_path}")
+                                if r != QMessageBox.StandardButton.Yes:
+                                    return
+                            except Exception:
+                                pass
                         viewer.load_image(first_path, source='restore')
+                        try:
+                            viewer._last_closed_image_path = first_path
+                        except Exception:
+                            pass
             except Exception:
                 pass
         # 보기 모드/배율 적용

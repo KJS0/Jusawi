@@ -18,9 +18,19 @@ class ImageView(QGraphicsView):
         self._flip_vertical = False
 
         # View configuration
-        self.setRenderHints(self.renderHints() |
-                            QPainter.RenderHint.SmoothPixmapTransform |
-                            QPainter.RenderHint.Antialiasing)
+        # 스무딩/안티앨리어싱 강화 + 텍스트/고해상도 최적화
+        rh = self.renderHints()
+        rh |= QPainter.RenderHint.SmoothPixmapTransform
+        rh |= QPainter.RenderHint.Antialiasing
+        try:
+            rh |= QPainter.RenderHint.HighQualityAntialiasing
+        except Exception:
+            pass
+        try:
+            rh |= QPainter.RenderHint.TextAntialiasing
+        except Exception:
+            pass
+        self.setRenderHints(rh)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -208,9 +218,10 @@ class ImageView(QGraphicsView):
         except Exception:
             src_scale = 1.0
         effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
-        # 적용
+        # 적용: 작은 배율에서 계단 현상을 줄이기 위해 하한 해상도 기준을 높여줌
         self.resetTransform()
         t_view = QTransform()
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         t_view.scale(effective, effective)
         self.setTransform(t_view)
         self._current_scale = effective
@@ -250,6 +261,7 @@ class ImageView(QGraphicsView):
         effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
         clamped = self.clamp(effective, self._min_scale, self._max_scale)
         t_view = QTransform()
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         t_view.scale(clamped, clamped)
         self.setTransform(t_view)
         self._current_scale = clamped
@@ -290,6 +302,7 @@ class ImageView(QGraphicsView):
         effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
         clamped = self.clamp(effective, self._min_scale, self._max_scale)
         t_view = QTransform()
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         t_view.scale(clamped, clamped)
         self.setTransform(t_view)
         self._current_scale = clamped

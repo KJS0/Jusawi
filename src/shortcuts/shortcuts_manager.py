@@ -27,6 +27,10 @@ COMMANDS: List[Command] = [
     Command("handle_escape", "나가기/전체화면 종료", "Esc 동작", "시스템", "handle_escape", ["Escape"], lock_key=True),
     Command("delete_current_image", "파일 삭제", "현재 파일을 휴지통으로", "파일", "delete_current_image", ["Delete"]),
 
+    # 최근/세션 관련
+    Command("reopen_last_closed", "마지막 닫은 이미지 다시 열기", "직전에 닫은 이미지를 다시 엽니다", "파일", "reopen_last_closed_image", ["Ctrl+Shift+T"]),
+    Command("clear_recent", "최근 목록 비우기", "최근 파일/폴더 목록을 지웁니다", "파일", "clear_recent", ["Ctrl+Alt+Shift+R"]),
+
     Command("show_prev_image", "이전 이미지", "이전 파일로 이동", "탐색", "show_prev_image", ["Left", "PageUp"]),
     # Space는 애니메이션 재생/일시정지용으로 사용하므로 기본 매핑에서 제외
     Command("show_next_image", "다음 이미지", "다음 파일로 이동", "탐색", "show_next_image", ["Right", "PageDown"]),
@@ -59,6 +63,17 @@ COMMANDS: List[Command] = [
     Command("help_shortcuts", "단축키 도움말", "현재 단축키 표시", "도움말", "open_shortcuts_help", ["F1"], lock_key=True),
     # Natural language search
     Command("open_natural_search", "자연어 검색", "텍스트로 이미지 검색", "검색", "open_natural_search_dialog", ["Ctrl+K"]),
+
+    # 최근 파일 빠른 실행 (Alt+1..9)
+    Command("open_recent_1", "최근 파일 1", "최근 파일 1 열기", "파일", "_open_recent_1", ["Alt+1"]),
+    Command("open_recent_2", "최근 파일 2", "최근 파일 2 열기", "파일", "_open_recent_2", ["Alt+2"]),
+    Command("open_recent_3", "최근 파일 3", "최근 파일 3 열기", "파일", "_open_recent_3", ["Alt+3"]),
+    Command("open_recent_4", "최근 파일 4", "최근 파일 4 열기", "파일", "_open_recent_4", ["Alt+4"]),
+    Command("open_recent_5", "최근 파일 5", "최근 파일 5 열기", "파일", "_open_recent_5", ["Alt+5"]),
+    Command("open_recent_6", "최근 파일 6", "최근 파일 6 열기", "파일", "_open_recent_6", ["Alt+6"]),
+    Command("open_recent_7", "최근 파일 7", "최근 파일 7 열기", "파일", "_open_recent_7", ["Alt+7"]),
+    Command("open_recent_8", "최근 파일 8", "최근 파일 8 열기", "파일", "_open_recent_8", ["Alt+8"]),
+    Command("open_recent_9", "최근 파일 9", "최근 파일 9 열기", "파일", "_open_recent_9", ["Alt+9"]),
 ]
 
 
