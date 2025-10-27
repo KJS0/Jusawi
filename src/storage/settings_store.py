@@ -246,6 +246,49 @@ def load_settings(viewer) -> None:
             viewer._tiff_open_first_page_only = bool(viewer.settings.value("tiff/open_first_page_only", True, bool))
         except Exception:
             viewer._tiff_open_first_page_only = True
+        # Drag & Drop / 목록 정책
+        try:
+            viewer._drop_allow_folder = bool(viewer.settings.value("drop/allow_folder_drop", False, bool))
+        except Exception:
+            viewer._drop_allow_folder = False
+        try:
+            viewer._drop_use_parent_scan = bool(viewer.settings.value("drop/use_parent_scan", True, bool))
+        except Exception:
+            viewer._drop_use_parent_scan = True
+        try:
+            viewer._drop_show_overlay = bool(viewer.settings.value("drop/show_progress_overlay", True, bool))
+        except Exception:
+            viewer._drop_show_overlay = True
+        try:
+            viewer._drop_confirm_over_threshold = bool(viewer.settings.value("drop/confirm_over_threshold", True, bool))
+        except Exception:
+            viewer._drop_confirm_over_threshold = True
+        try:
+            viewer._drop_large_threshold = int(viewer.settings.value("drop/large_drop_threshold", 500))
+        except Exception:
+            viewer._drop_large_threshold = 500
+        # Prefetch/성능
+        try:
+            viewer._enable_thumb_prefetch = bool(viewer.settings.value("prefetch/thumbs_enabled", True, bool))
+        except Exception:
+            viewer._enable_thumb_prefetch = True
+        try:
+            viewer._preload_radius = int(viewer.settings.value("prefetch/preload_radius", 2))
+        except Exception:
+            viewer._preload_radius = 2
+        try:
+            viewer._enable_map_prefetch = bool(viewer.settings.value("prefetch/map_enabled", True, bool))
+        except Exception:
+            viewer._enable_map_prefetch = True
+        # 자동화
+        try:
+            viewer._auto_ai_on_open = bool(viewer.settings.value("ai/auto_on_open", False, bool))
+        except Exception:
+            viewer._auto_ai_on_open = False
+        try:
+            viewer._auto_ai_delay_ms = int(viewer.settings.value("ai/auto_delay_ms", 0))
+        except Exception:
+            viewer._auto_ai_delay_ms = 0
         # Navigation/Filmstrip/Zoom 정책 추가
         try:
             viewer._nav_wrap_ends = bool(viewer.settings.value("nav/wrap_ends", False, bool))
@@ -403,6 +446,19 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("view/double_click_action", str(getattr(viewer, "_double_click_action", 'toggle')))
         viewer.settings.setValue("view/middle_click_action", str(getattr(viewer, "_middle_click_action", 'none')))
         viewer.settings.setValue("view/preserve_visual_size_on_dpr_change", bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
+        # Drag & Drop / 목록 정책 저장
+        viewer.settings.setValue("drop/allow_folder_drop", bool(getattr(viewer, "_drop_allow_folder", False)))
+        viewer.settings.setValue("drop/use_parent_scan", bool(getattr(viewer, "_drop_use_parent_scan", True)))
+        viewer.settings.setValue("drop/show_progress_overlay", bool(getattr(viewer, "_drop_show_overlay", True)))
+        viewer.settings.setValue("drop/confirm_over_threshold", bool(getattr(viewer, "_drop_confirm_over_threshold", True)))
+        viewer.settings.setValue("drop/large_drop_threshold", int(getattr(viewer, "_drop_large_threshold", 500)))
+        # Prefetch/성능 저장
+        viewer.settings.setValue("prefetch/thumbs_enabled", bool(getattr(viewer, "_enable_thumb_prefetch", True)))
+        viewer.settings.setValue("prefetch/preload_radius", int(getattr(viewer, "_preload_radius", 2)))
+        viewer.settings.setValue("prefetch/map_enabled", bool(getattr(viewer, "_enable_map_prefetch", True)))
+        # 자동화 저장
+        viewer.settings.setValue("ai/auto_on_open", bool(getattr(viewer, "_auto_ai_on_open", False)))
+        viewer.settings.setValue("ai/auto_delay_ms", int(getattr(viewer, "_auto_ai_delay_ms", 0)))
     except Exception:
         pass
 

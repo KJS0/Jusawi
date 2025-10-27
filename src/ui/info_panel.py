@@ -230,6 +230,9 @@ def update_info_panel(owner) -> None:
 
 
 def schedule_map_fetch(owner, lat: float, lon: float, w: int, h: int, zoom: int) -> None:
+    # 설정: 지도 프리페치 허용 시에만 예약
+    if not bool(getattr(owner, "_enable_map_prefetch", True)):
+        return
     owner._pending_map = (lat, lon, w, h, zoom)
     try:
         owner._map_debounce.start()

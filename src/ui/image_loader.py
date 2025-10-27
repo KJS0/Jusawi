@@ -195,6 +195,22 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
         preload_neighbors(viewer)
     except Exception:
         pass
+    # 자동화: AI 분석 자동 실행
+    try:
+        if bool(getattr(viewer, "_auto_ai_on_open", False)) and (source in ("open", "drop", "nav")):
+            delay = max(0, int(getattr(viewer, "_auto_ai_delay_ms", 0)))
+            from PyQt6.QtCore import QTimer  # type: ignore[import]
+            def _run_ai():
+                try:
+                    viewer.open_ai_analysis_dialog()
+                except Exception:
+                    pass
+            if delay > 0:
+                QTimer.singleShot(delay, _run_ai)
+            else:
+                QTimer.singleShot(0, _run_ai)
+    except Exception:
+        pass
     if source in ('open', 'drop'):
         try:
             viewer.recent_files = update_mru(viewer.recent_files, path)
@@ -292,6 +308,8 @@ def preload_neighbors(viewer: "JusawiViewer") -> None:
     if not (0 <= idx < len(viewer.image_files_in_dir)):
         return
     paths: list[str] = []
+    if not bool(getattr(viewer, "_enable_thumb_prefetch", True)):
+        return
     for off in range(1, getattr(viewer, "_preload_radius", 2) + 1):
         n = idx + off
         p = idx - off

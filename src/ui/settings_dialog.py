@@ -79,6 +79,41 @@ class SettingsDialog(QDialog):
         form.addRow("확대 상태 유지", self.combo_zoom_policy)
         gen_layout.addLayout(form)
 
+        # 드래그 앤 드롭 옵션
+        gen_layout.addWidget(QLabel("드래그 앤 드롭", self.general_tab))
+        self.chk_drop_allow_folder = QCheckBox("폴더 드롭 허용", self.general_tab)
+        self.chk_drop_parent_scan = QCheckBox("부모 폴더 스캔으로 전체 탐색", self.general_tab)
+        self.chk_drop_overlay = QCheckBox("대용량 드롭 진행 오버레이 표시", self.general_tab)
+        self.chk_drop_confirm = QCheckBox("파일 수 임계치 초과 시 확인창", self.general_tab)
+        self.spin_drop_threshold = QSpinBox(self.general_tab); self.spin_drop_threshold.setRange(50, 100000); self.spin_drop_threshold.setSuffix(" 개")
+        form_dnd = QFormLayout()
+        form_dnd.addRow("폴더 드롭", self.chk_drop_allow_folder)
+        form_dnd.addRow("목록 구성", self.chk_drop_parent_scan)
+        form_dnd.addRow("진행 오버레이", self.chk_drop_overlay)
+        form_dnd.addRow("대용량 확인", self.chk_drop_confirm)
+        form_dnd.addRow("임계치", self.spin_drop_threshold)
+        gen_layout.addLayout(form_dnd)
+
+        # 성능/프리페치
+        gen_layout.addWidget(QLabel("성능/프리페치", self.general_tab))
+        self.chk_prefetch_thumbs = QCheckBox("썸네일/이웃 이미지 프리로드", self.general_tab)
+        self.spin_preload_radius = QSpinBox(self.general_tab); self.spin_preload_radius.setRange(0, 20); self.spin_preload_radius.setSuffix(" 장")
+        self.chk_prefetch_map = QCheckBox("지도 캐시 프리페치", self.general_tab)
+        form_pf = QFormLayout()
+        form_pf.addRow("썸네일 프리페치", self.chk_prefetch_thumbs)
+        form_pf.addRow("이웃 프리로드 반경", self.spin_preload_radius)
+        form_pf.addRow("지도 프리페치", self.chk_prefetch_map)
+        gen_layout.addLayout(form_pf)
+
+        # 자동화
+        gen_layout.addWidget(QLabel("자동화", self.general_tab))
+        self.chk_ai_auto = QCheckBox("사진 열기/드롭 후 AI 분석 자동 실행", self.general_tab)
+        self.spin_ai_delay = QSpinBox(self.general_tab); self.spin_ai_delay.setRange(0, 60000); self.spin_ai_delay.setSuffix(" ms")
+        form_auto = QFormLayout()
+        form_auto.addRow("AI 자동 실행", self.chk_ai_auto)
+        form_auto.addRow("지연 시간", self.spin_ai_delay)
+        gen_layout.addLayout(form_auto)
+
         # TIFF (라벨 옆에 체크박스 배치)
         from PyQt6.QtWidgets import QHBoxLayout  # type: ignore[import]
         tiff_row = QHBoxLayout()
@@ -376,6 +411,49 @@ class SettingsDialog(QDialog):
             self.chk_preserve_visual_dpr.setChecked(bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
         except Exception:
             self.chk_preserve_visual_dpr.setChecked(False)
+        # 드래그 앤 드롭 로드
+        try:
+            self.chk_drop_allow_folder.setChecked(bool(getattr(viewer, "_drop_allow_folder", False)))
+        except Exception:
+            self.chk_drop_allow_folder.setChecked(False)
+        try:
+            self.chk_drop_parent_scan.setChecked(bool(getattr(viewer, "_drop_use_parent_scan", True)))
+        except Exception:
+            self.chk_drop_parent_scan.setChecked(True)
+        try:
+            self.chk_drop_overlay.setChecked(bool(getattr(viewer, "_drop_show_overlay", True)))
+        except Exception:
+            self.chk_drop_overlay.setChecked(True)
+        try:
+            self.chk_drop_confirm.setChecked(bool(getattr(viewer, "_drop_confirm_over_threshold", True)))
+        except Exception:
+            self.chk_drop_confirm.setChecked(True)
+        try:
+            self.spin_drop_threshold.setValue(int(getattr(viewer, "_drop_large_threshold", 500)))
+        except Exception:
+            self.spin_drop_threshold.setValue(500)
+        # 성능/프리페치 로드
+        try:
+            self.chk_prefetch_thumbs.setChecked(bool(getattr(viewer, "_enable_thumb_prefetch", True)))
+        except Exception:
+            self.chk_prefetch_thumbs.setChecked(True)
+        try:
+            self.spin_preload_radius.setValue(int(getattr(viewer, "_preload_radius", 2)))
+        except Exception:
+            self.spin_preload_radius.setValue(2)
+        try:
+            self.chk_prefetch_map.setChecked(bool(getattr(viewer, "_enable_map_prefetch", True)))
+        except Exception:
+            self.chk_prefetch_map.setChecked(True)
+        # 자동화 로드
+        try:
+            self.chk_ai_auto.setChecked(bool(getattr(viewer, "_auto_ai_on_open", False)))
+        except Exception:
+            self.chk_ai_auto.setChecked(False)
+        try:
+            self.spin_ai_delay.setValue(int(getattr(viewer, "_auto_ai_delay_ms", 0)))
+        except Exception:
+            self.spin_ai_delay.setValue(0)
 
     # commit back to viewer (does not save)
     def apply_to_viewer(self, viewer):
@@ -498,16 +576,6 @@ class SettingsDialog(QDialog):
             pass
         try:
             viewer._smooth_transform = bool(self.chk_smooth.isChecked())
-            # 렌더 힌트 즉시 반영
-            if hasattr(viewer, 'image_display_area') and viewer.image_display_area is not None:
-                iv = viewer.image_display_area
-                from PyQt6.QtGui import QPainter
-                hints = iv.renderHints()
-                if viewer._smooth_transform:
-                    hints |= QPainter.RenderHint.SmoothPixmapTransform
-                else:
-                    hints &= ~QPainter.RenderHint.SmoothPixmapTransform
-                iv.setRenderHints(hints)
         except Exception:
             pass
         try:
@@ -516,17 +584,18 @@ class SettingsDialog(QDialog):
             pass
         try:
             viewer._wheel_zoom_requires_ctrl = bool(self.chk_wheel_requires_ctrl.isChecked())
+        except Exception:
+            pass
+        try:
             viewer._wheel_zoom_alt_precise = bool(self.chk_alt_precise.isChecked())
         except Exception:
             pass
         try:
-            di = int(self.combo_dbl.currentIndex())
-            viewer._double_click_action = ("toggle" if di == 0 else ("fit" if di == 1 else ("fit_width" if di == 2 else ("fit_height" if di == 3 else ("actual" if di == 4 else "none")))))
+            viewer._double_click_action = ("toggle" if int(self.combo_dbl.currentIndex()) == 0 else ("fit" if int(self.combo_dbl.currentIndex()) == 1 else ("fit_width" if int(self.combo_dbl.currentIndex()) == 2 else ("fit_height" if int(self.combo_dbl.currentIndex()) == 3 else ("actual" if int(self.combo_dbl.currentIndex()) == 4 else "none")))))
         except Exception:
             pass
         try:
-            mi = int(self.combo_mid.currentIndex())
-            viewer._middle_click_action = ("none" if mi == 0 else ("toggle" if mi == 1 else ("fit" if mi == 2 else "actual")))
+            viewer._middle_click_action = ("none" if int(self.combo_mid.currentIndex()) == 0 else ("toggle" if int(self.combo_mid.currentIndex()) == 1 else ("fit" if int(self.combo_mid.currentIndex()) == 2 else "actual")))
         except Exception:
             pass
         try:
@@ -541,37 +610,47 @@ class SettingsDialog(QDialog):
             viewer._preserve_visual_size_on_dpr_change = bool(self.chk_preserve_visual_dpr.isChecked())
         except Exception:
             pass
-        # 파일 관련 설정 변경 시, 캐시/썸네일까지 리셋 후 현재 폴더를 새로운 기준으로 재스캔(현재 파일은 유지)
+        # 드래그 앤 드롭 적용
         try:
-            cur = getattr(viewer, "current_image_path", "") or ""
-            if cur and os.path.isfile(cur):
-                try:
-                    viewer.image_service.clear_all_caches()
-                except Exception:
-                    pass
-                try:
-                    # 썸네일 메모리 캐시도 초기화
-                    if hasattr(viewer, "_clear_filmstrip_cache") and callable(viewer._clear_filmstrip_cache):
-                        viewer._clear_filmstrip_cache()
-                except Exception:
-                    pass
-                d = os.path.dirname(cur)
-                if d and os.path.isdir(d):
-                    viewer.scan_directory(d)
-                    # 재정렬된 목록에서 현재 파일 인덱스 복원 또는 대체 파일 적용
-                    try:
-                        nc = os.path.normcase
-                        if viewer.image_files_in_dir:
-                            try:
-                                idx = [nc(p) for p in viewer.image_files_in_dir].index(nc(cur))
-                                viewer.current_image_index = idx
-                                viewer.load_image_at_current_index()
-                            except ValueError:
-                                # 현재 파일이 목록에서 제외되었다면 첫 항목으로 대체 로드
-                                viewer.current_image_index = 0
-                                viewer.load_image_at_current_index()
-                    except Exception:
-                        pass
+            viewer._drop_allow_folder = bool(self.chk_drop_allow_folder.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._drop_use_parent_scan = bool(self.chk_drop_parent_scan.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._drop_show_overlay = bool(self.chk_drop_overlay.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._drop_confirm_over_threshold = bool(self.chk_drop_confirm.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._drop_large_threshold = int(self.spin_drop_threshold.value())
+        except Exception:
+            pass
+        # 성능/프리페치 적용
+        try:
+            viewer._enable_thumb_prefetch = bool(self.chk_prefetch_thumbs.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._preload_radius = int(self.spin_preload_radius.value())
+        except Exception:
+            pass
+        try:
+            viewer._enable_map_prefetch = bool(self.chk_prefetch_map.isChecked())
+        except Exception:
+            pass
+        # 자동화 적용
+        try:
+            viewer._auto_ai_on_open = bool(self.chk_ai_auto.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._auto_ai_delay_ms = int(self.spin_ai_delay.value())
         except Exception:
             pass
 
