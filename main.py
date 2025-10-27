@@ -16,7 +16,6 @@ def _mask_args(argv):
             out.append(a)
     return out
 
-
 if __name__ == "__main__":
     # 로깅 초기화
     try:

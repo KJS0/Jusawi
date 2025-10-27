@@ -13,15 +13,12 @@ if TYPE_CHECKING:
 def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> None:
     # 확대 상태 유지 정책에 따라 변환/보기 초기화 수준 결정
     zoom_policy = str(getattr(viewer, "_zoom_policy", "mode"))
-    if zoom_policy == 'reset':
-        try:
-            viewer._tf_rotation = 0
-            viewer._tf_flip_h = False
-            viewer._tf_flip_v = False
-        except Exception:
-            pass
-    else:
-        # 회전/뒤집기는 유지. 배율/보기 모드는 하단에서 별도로 처리
+    # 요구사항: 변환 상태 유지하지 않음 → 항상 초기화(비파괴 표시만)
+    try:
+        viewer._tf_rotation = 0
+        viewer._tf_flip_h = False
+        viewer._tf_flip_v = False
+    except Exception:
         pass
     pixmap = QPixmap.fromImage(img)
     viewer.image_display_area.setPixmap(pixmap)

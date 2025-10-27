@@ -328,7 +328,7 @@ class JusawiViewer(QMainWindow):
         self._ui_chrome_visible = True
         self._ui_auto_hide_timer = QTimer(self)
         self._ui_auto_hide_timer.setSingleShot(True)
-        self._ui_auto_hide_timer.timeout.connect(lambda: self._apply_ui_chrome_visibility(False, temporary=True))
+        self._ui_auto_hide_timer.timeout.connect(self._on_ui_auto_hide_timer)
         self._cursor_hide_timer = QTimer(self)
         self._cursor_hide_timer.setSingleShot(True)
         self._cursor_hide_timer.timeout.connect(self._hide_cursor_if_fullscreen)
@@ -595,6 +595,12 @@ class JusawiViewer(QMainWindow):
 
     def flip_vertical(self):
         viewer_cmd.flip_vertical(self)
+
+    def rotate_cycle(self):
+        viewer_cmd.rotate_cycle(self)
+
+    def reset_transform(self):
+        viewer_cmd.reset_transform(self)
 
     def reset_transform_state(self):
         # 제거된 기능 (더 이상 사용하지 않음)
@@ -1205,6 +1211,21 @@ class JusawiViewer(QMainWindow):
     def _hide_cursor_if_fullscreen(self) -> None:
         from .fs_overlays import hide_cursor_if_fullscreen
         hide_cursor_if_fullscreen(self)
+
+    def _on_ui_auto_hide_timer(self) -> None:
+        try:
+            if not getattr(self, "is_fullscreen", False):
+                return
+            try:
+                from .fs_overlays import _is_mouse_over_ui_chrome  # type: ignore
+            except Exception:
+                _is_mouse_over_ui_chrome = None  # type: ignore
+            if _is_mouse_over_ui_chrome is not None and _is_mouse_over_ui_chrome(self):
+                # 마우스가 UI 크롬 위에 있으면 숨기지 않음
+                return
+        except Exception:
+            pass
+        self._apply_ui_chrome_visibility(False, temporary=True)
 
     def _restore_cursor(self) -> None:
         from .fs_overlays import restore_cursor

@@ -303,6 +303,11 @@ def load_settings(viewer) -> None:
             viewer._refit_on_transform = bool(viewer.settings.value("view/refit_on_transform", True, bool))
         except Exception:
             viewer._refit_on_transform = True
+        # 회전 시 화면 중심 앵커 유지 옵션(기본 True)
+        try:
+            viewer._anchor_preserve_on_transform = bool(viewer.settings.value("view/anchor_preserve_on_transform", True, bool))
+        except Exception:
+            viewer._anchor_preserve_on_transform = True
         try:
             viewer._fit_margin_pct = int(viewer.settings.value("view/fit_margin_pct", 0))
         except Exception:
@@ -388,6 +393,7 @@ def save_settings(viewer) -> None:
         # 보기/줌 고급 옵션 저장
         # 보기 공유 저장 제거
         viewer.settings.setValue("view/refit_on_transform", bool(getattr(viewer, "_refit_on_transform", True)))
+        viewer.settings.setValue("view/anchor_preserve_on_transform", bool(getattr(viewer, "_anchor_preserve_on_transform", True)))
         viewer.settings.setValue("view/fit_margin_pct", int(getattr(viewer, "_fit_margin_pct", 0)))
         viewer.settings.setValue("view/wheel_zoom_requires_ctrl", bool(getattr(viewer, "_wheel_zoom_requires_ctrl", True)))
         viewer.settings.setValue("view/wheel_zoom_alt_precise", bool(getattr(viewer, "_wheel_zoom_alt_precise", True)))

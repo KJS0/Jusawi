@@ -127,6 +127,8 @@ class SettingsDialog(QDialog):
         self.combo_mid = QComboBox(self.view_tab); self.combo_mid.addItems(["없음", "토글(화면↔100%)", "화면 맞춤", "실제 크기"])  # none/toggle/fit/actual
         # 회전/반전 시 재맞춤 여부
         self.chk_refit_on_tf = QCheckBox("회전/반전 후 자동 재맞춤", self.view_tab)
+        # 회전 시 화면 중심 앵커 유지 여부
+        self.chk_anchor_preserve = QCheckBox("회전 시 화면 중심 앵커 유지", self.view_tab)
         # DPR 옵션
         self.chk_preserve_visual_dpr = QCheckBox("DPR 변경 시 시각 크기 유지", self.view_tab)
         form_view.addRow("기본 보기 모드", self.combo_default_view)
@@ -142,6 +144,7 @@ class SettingsDialog(QDialog):
         form_view.addRow("더블클릭 동작", self.combo_dbl)
         form_view.addRow("휠클릭 동작", self.combo_mid)
         form_view.addRow("회전/반전 재맞춤", self.chk_refit_on_tf)
+        form_view.addRow("회전 중심 앵커 유지", self.chk_anchor_preserve)
         form_view.addRow("DPR 시각 크기 유지", self.chk_preserve_visual_dpr)
         view_layout.addLayout(form_view)
         # ----- 전체화면/오버레이 탭 -----
@@ -366,6 +369,10 @@ class SettingsDialog(QDialog):
         except Exception:
             self.chk_refit_on_tf.setChecked(True)
         try:
+            self.chk_anchor_preserve.setChecked(bool(getattr(viewer, "_anchor_preserve_on_transform", True)))
+        except Exception:
+            self.chk_anchor_preserve.setChecked(True)
+        try:
             self.chk_preserve_visual_dpr.setChecked(bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
         except Exception:
             self.chk_preserve_visual_dpr.setChecked(False)
@@ -524,6 +531,10 @@ class SettingsDialog(QDialog):
             pass
         try:
             viewer._refit_on_transform = bool(self.chk_refit_on_tf.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._anchor_preserve_on_transform = bool(self.chk_anchor_preserve.isChecked())
         except Exception:
             pass
         try:

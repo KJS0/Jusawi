@@ -502,23 +502,28 @@ class FilmstripView(QListView):
 
     def wheelEvent(self, event):
         mods = QApplication.keyboardModifiers()
-        dy = event.angleDelta().y()
+        dy = int(event.angleDelta().y())
+        dx = int(event.angleDelta().x())
         if mods & Qt.KeyboardModifier.ControlModifier:
-            if dy > 0:
+            if dy > 0 or dx > 0:
                 self._size_idx = min(self._size_idx + 1, len(THUMB_STEPS) - 1)
-            elif dy < 0:
+            elif dy < 0 or dx < 0:
                 self._size_idx = max(self._size_idx - 1, 0)
             self._update_fixed_height()
             self.viewport().update()
             event.accept()
             return
-        if mods & Qt.KeyboardModifier.ShiftModifier:
-            try:
-                self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - dy * 2)
-            except Exception:
-                pass
-            event.accept()
-            return
+        # 기본: 수평 스크롤(Shift 없이도 적용). 트랙패드/마우스 모두 지원
+        try:
+            delta = dx if abs(dx) >= abs(dy) else dy
+            if delta:
+                sb = self.horizontalScrollBar()
+                sb.setValue(sb.value() - delta)
+                event.accept()
+                return
+        except Exception:
+            pass
+        # 폴백: 기본 처리
         super().wheelEvent(event)
 
     def keyPressEvent(self, event):

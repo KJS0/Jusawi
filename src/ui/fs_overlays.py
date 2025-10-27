@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QPoint, QEasingCurve, QPropertyAnimation  # type: ignore[import]
+from PyQt6.QtGui import QCursor  # type: ignore[import]
 
 
 def apply_ui_chrome_visibility(viewer, visible: bool, temporary: bool = False) -> None:
@@ -99,6 +100,20 @@ def on_user_activity(viewer) -> None:
         ensure_fs_overlays_created(viewer)
     except Exception:
         pass
+    # 마우스가 툴바/필름스트립 위에 있으면 자동 숨김 타이머를 시작하지 않음
+    if _is_mouse_over_ui_chrome(viewer):
+        # UI는 보이도록 유지하고 기존 타이머를 중지
+        apply_ui_chrome_visibility(viewer, True, temporary=True)
+        try:
+            viewer._ui_auto_hide_timer.stop()
+        except Exception:
+            pass
+        try:
+            viewer._cursor_hide_timer.stop()
+        except Exception:
+            pass
+        restore_cursor(viewer)
+        return
     if int(getattr(viewer, "_fs_auto_hide_ms", 0)) > 0:
         apply_ui_chrome_visibility(viewer, True, temporary=True)
         try:
@@ -116,6 +131,9 @@ def on_user_activity(viewer) -> None:
 def start_auto_hide_timers(viewer) -> None:
     if not viewer.is_fullscreen:
         return
+    # 마우스가 UI 크롬 위면 시작하지 않음
+    if _is_mouse_over_ui_chrome(viewer):
+        return
     try:
         if int(getattr(viewer, "_fs_auto_hide_ms", 0)) > 0:
             viewer._ui_auto_hide_timer.start(int(viewer._fs_auto_hide_ms))
@@ -127,6 +145,9 @@ def start_auto_hide_timers(viewer) -> None:
 
 def hide_cursor_if_fullscreen(viewer) -> None:
     if not viewer.is_fullscreen:
+        return
+    # 마우스가 UI 크롬(툴바/필름스트립) 위면 커서 숨김 금지
+    if _is_mouse_over_ui_chrome(viewer):
         return
     try:
         viewer.setCursor(Qt.CursorShape.BlankCursor)
@@ -141,6 +162,34 @@ def restore_cursor(viewer) -> None:
         viewer.image_display_area.viewport().setCursor(Qt.CursorShape.ArrowCursor)
     except Exception:
         pass
+
+
+def _is_mouse_over_ui_chrome(viewer) -> bool:
+    try:
+        gp = QCursor.pos()
+        # 툴바 영역
+        try:
+            if hasattr(viewer, 'button_bar') and viewer.button_bar and viewer.button_bar.isVisible():
+                r = viewer.button_bar.rect()
+                tl = viewer.button_bar.mapToGlobal(r.topLeft())
+                if (gp.x() >= tl.x() and gp.x() <= tl.x() + r.width() and
+                        gp.y() >= tl.y() and gp.y() <= tl.y() + r.height()):
+                    return True
+        except Exception:
+            pass
+        # 필름스트립 영역
+        try:
+            if hasattr(viewer, 'filmstrip') and viewer.filmstrip and viewer.filmstrip.isVisible():
+                r2 = viewer.filmstrip.rect()
+                tl2 = viewer.filmstrip.mapToGlobal(r2.topLeft())
+                if (gp.x() >= tl2.x() and gp.x() <= tl2.x() + r2.width() and
+                        gp.y() >= tl2.y() and gp.y() <= tl2.y() + r2.height()):
+                    return True
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
 
 
 def ensure_fs_overlays_created(viewer) -> None:

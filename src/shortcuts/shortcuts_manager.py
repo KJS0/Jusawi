@@ -41,12 +41,14 @@ COMMANDS: List[Command] = [
     Command("zoom_in", "확대", "점진 확대", "보기", "zoom_in", ["=", "Ctrl++", "Ctrl+="]),
     Command("zoom_out", "축소", "점진 축소", "보기", "zoom_out", ["-", "Ctrl+-", "Ctrl+Minus", "Ctrl+Subtract"]),
 
-    # 회전은 기본 미할당(버튼만). 원하면 사용자가 매핑
-    Command("rotate_ccw_90", "왼쪽 90° 회전", "반시계 방향 회전", "편집", "rotate_ccw_90", ["E"]),
-    Command("rotate_cw_90", "오른쪽 90° 회전", "시계 방향 회전", "편집", "rotate_cw_90", []),
+    # 회전/반전 기본 단축키 업데이트
+    Command("rotate_ccw_90", "왼쪽 90° 회전", "반시계 방향 회전", "편집", "rotate_ccw_90", ["["]),
+    Command("rotate_cw_90", "오른쪽 90° 회전", "시계 방향 회전", "편집", "rotate_cw_90", ["]"]),
+    Command("rotate_cycle", "순환 회전(시계 방향)", "0→90→180→270 순환", "편집", "rotate_cycle", ["Shift+R"]),
     Command("rotate_180", "180° 회전", "180도 회전", "편집", "rotate_180", ["Ctrl+Alt+R"]),
-    Command("flip_horizontal", "좌우 뒤집기", "수평 반전", "편집", "flip_horizontal", ["Ctrl+Alt+H"]),
-    Command("flip_vertical", "상하 뒤집기", "수직 반전", "편집", "flip_vertical", ["Ctrl+Alt+V"]),
+    Command("flip_horizontal", "좌우 뒤집기", "수평 반전", "편집", "flip_horizontal", ["H"]),
+    Command("flip_vertical", "상하 뒤집기", "수직 반전", "편집", "flip_vertical", ["V"]),
+    Command("reset_transform", "변환 초기화", "회전/반전 상태 초기화", "편집", "reset_transform", ["Backspace"]),
 
     # 편집 히스토리 제거됨
 

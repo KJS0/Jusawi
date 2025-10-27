@@ -451,6 +451,38 @@ class ImageView(QGraphicsView):
         y = 0 if y < 0 else (h - 1 if y >= h else y)
         self.cursorPosChanged.emit(x, y)
 
+    def _is_mouse_over_ui_chrome(self) -> bool:
+        try:
+            win = self.window()
+            if win is None:
+                return False
+            # 마우스 글로벌 좌표
+            from PyQt6.QtGui import QCursor  # type: ignore
+            gp = QCursor.pos()
+            # 툴바 영역
+            try:
+                if hasattr(win, 'button_bar') and win.button_bar and win.button_bar.isVisible():
+                    r = win.button_bar.rect()
+                    rp = win.button_bar.mapToGlobal(r.topLeft())
+                    rr = QRectF(rp.x(), rp.y(), r.width(), r.height())
+                    if rr.contains(gp.x(), gp.y()):
+                        return True
+            except Exception:
+                pass
+            # 필름스트립 영역
+            try:
+                if hasattr(win, 'filmstrip') and win.filmstrip and win.filmstrip.isVisible():
+                    r2 = win.filmstrip.rect()
+                    rp2 = win.filmstrip.mapToGlobal(r2.topLeft())
+                    rr2 = QRectF(rp2.x(), rp2.y(), r2.width(), r2.height())
+                    if rr2.contains(gp.x(), gp.y()):
+                        return True
+            except Exception:
+                pass
+            return False
+        except Exception:
+            return False
+
     # 애니메이션 상태 API (외부에서 설정)
     def set_animation_state(self, is_animation: bool, current_index: int = 0, total_frames: int = -1):
         self._is_animation = bool(is_animation)
@@ -499,8 +531,8 @@ class ImageView(QGraphicsView):
                 win = self.window()
                 if hasattr(win, "_position_fullscreen_overlays"):
                     win._position_fullscreen_overlays()
-                # 전체화면에서 줌 중 즉시 숨김 유지
-                if getattr(win, "is_fullscreen", False):
+                # 전체화면에서 줌 중, 마우스가 UI 크롬 위에 없으면 일시 숨김
+                if getattr(win, "is_fullscreen", False) and not self._is_mouse_over_ui_chrome():
                     try:
                         win._apply_ui_chrome_visibility(False, temporary=True)
                     except Exception:
@@ -525,10 +557,10 @@ class ImageView(QGraphicsView):
                     sby.setValue(sby.value() - dy2)
                 except Exception:
                     pass
-            # 전체화면에서는 팬 중 즉시 숨김 유지
+            # 전체화면에서 팬 중, 마우스가 UI 크롬 위에 없으면 일시 숨김
             try:
                 win = self.window()
-                if getattr(win, "is_fullscreen", False):
+                if getattr(win, "is_fullscreen", False) and not self._is_mouse_over_ui_chrome():
                     try:
                         win._apply_ui_chrome_visibility(False, temporary=True)
                     except Exception:
@@ -691,8 +723,12 @@ class ImageView(QGraphicsView):
     def _apply_item_transform(self):
         if not self._pix_item:
             return
-        # Preserve current view anchor for non-fit modes
-        preserve_anchor = self._view_mode not in ('fit', 'fit_width', 'fit_height')
+        # Preserve current view anchor for non-fit modes if enabled in settings
+        try:
+            ap = bool(getattr(self.window(), "_anchor_preserve_on_transform", True))
+        except Exception:
+            ap = True
+        preserve_anchor = ap and (self._view_mode not in ('fit', 'fit_width', 'fit_height'))
         item_anchor_point = None
         if preserve_anchor:
             try:
