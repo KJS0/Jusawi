@@ -28,6 +28,34 @@ def open_settings_dialog(viewer: "JusawiViewer") -> None:
     d.load_from_viewer(viewer)
     if d.exec() == d.DialogCode.Accepted:
         d.apply_to_viewer(viewer)
+        # 색상 설정 반영 및 현재 이미지 재로딩(가시적 적용)
+        try:
+            if hasattr(viewer, 'image_service') and viewer.image_service is not None:
+                svc = viewer.image_service
+                svc._icc_ignore_embedded = bool(getattr(viewer, "_icc_ignore_embedded", False))
+                svc._assumed_colorspace = str(getattr(viewer, "_assumed_colorspace", "sRGB"))
+                svc._preview_target = str(getattr(viewer, "_preview_target", "sRGB"))
+                svc._fallback_policy = str(getattr(viewer, "_fallback_policy", "ignore"))
+        except Exception:
+            pass
+        # 썸네일 캐시 비우기(설정 변화 시 재생성)
+        try:
+            if hasattr(viewer, "_clear_filmstrip_cache") and callable(viewer._clear_filmstrip_cache):
+                viewer._clear_filmstrip_cache()
+        except Exception:
+            pass
+        # 현재 이미지 재적용
+        try:
+            import os  # lazy import
+            cur = getattr(viewer, "current_image_path", None)
+            if cur and os.path.isfile(cur):
+                try:
+                    viewer.image_service.invalidate_path(cur)
+                except Exception:
+                    pass
+                viewer.load_image(cur, source='settings')
+        except Exception:
+            pass
         try:
             viewer._apply_ui_theme_and_spacing()
         except Exception:

@@ -56,7 +56,17 @@ def update_status_left(viewer) -> None:
             cs = describe_colorspace(img)
     except Exception:
         cs = ""
+    # 상세 표시 옵션: 프로파일명/비트뎁스
+    show_detail = bool(getattr(viewer, "_statusbar_show_profile_details", False))
     cs_disp = f" [{cs}]" if cs else ""
+    if show_detail and pix and not pix.isNull():
+        try:
+            img2 = pix.toImage()
+            name = getattr(img2.colorSpace(), 'description', lambda: '')() or cs
+            depth2 = compute_display_bit_depth(img2)
+            cs_disp = f" [{name or cs}/{depth2}b]"
+        except Exception:
+            pass
     viewer.status_left_label.setText(f"{idx_disp}/{total} {filename} {size_str} {dims}{cs_disp}")
     # 현재 표시가 썸네일이면 원본 업그레이드를 예약(정렬/인덱스 변동 시에도 보장)
     try:

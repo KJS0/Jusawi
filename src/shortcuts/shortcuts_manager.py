@@ -62,6 +62,9 @@ COMMANDS: List[Command] = [
     # 애니메이션 토글: Space 고정(다른 명령에 할당 금지)
     Command("toggle_animation", "애니메이션 토글", "재생/일시정지 전환", "보기", "anim_toggle_play", ["Space"], lock_key=True),
 
+    # 색상 보기 A/B 토글 (원본 vs sRGB/타깃 변환)
+    Command("toggle_color_ab", "원본/sRGB 보기 토글", "색상 보기 A/B 전환", "보기", "toggle_color_ab", ["C"]),
+
     # 도움말(F1)은 고정
     Command("help_shortcuts", "단축키 도움말", "현재 단축키 표시", "도움말", "open_shortcuts_help", ["F1"], lock_key=True),
     # Natural language search

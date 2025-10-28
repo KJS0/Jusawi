@@ -136,6 +136,21 @@ class ThumbTask(QRunnable):
         if img.isNull():
             self.signal.emit(self.row, QPixmap())
             return
+        # 썸네일 색 변환(옵션)
+        try:
+            parent = getattr(self, 'parent', lambda: None)()
+        except Exception:
+            parent = None
+        try:
+            win = parent if parent is not None else None
+            if win is not None and bool(getattr(win, "_thumb_convert_to_srgb", True)):
+                try:
+                    from ..services.image_service import _convert_to_srgb  # type: ignore
+                    img = _convert_to_srgb(img)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         if img.width() > eff_px or img.height() > eff_px:
             img = img.scaled(eff_px, eff_px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         pm = QPixmap.fromImage(img)

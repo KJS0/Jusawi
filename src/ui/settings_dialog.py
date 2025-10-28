@@ -274,6 +274,33 @@ class SettingsDialog(QDialog):
         form_view.addRow("회전 중심 앵커 유지", self.chk_anchor_preserve)
         form_view.addRow("DPR 시각 크기 유지", self.chk_preserve_visual_dpr)
         view_layout.addLayout(form_view)
+
+        # ----- 색상 관리 탭 -----
+        self.color_tab = QWidget(self)
+        self.tabs.addTab(self.color_tab, "색상")
+        color_layout = QVBoxLayout(self.color_tab)
+        try:
+            color_layout.setContentsMargins(8, 8, 8, 8)
+            color_layout.setSpacing(8)
+        except Exception:
+            pass
+        self.chk_icc_ignore = QCheckBox("임베디드 ICC 무시", self.color_tab)
+        self.combo_assumed = QComboBox(self.color_tab)
+        self.combo_assumed.addItems(["sRGB", "Display P3", "Adobe RGB"])  # ICC 미탑재/무시 시 가정
+        self.combo_target = QComboBox(self.color_tab)
+        self.combo_target.addItems(["sRGB", "Display P3", "Adobe RGB"])   # 미리보기 타깃
+        self.combo_fallback = QComboBox(self.color_tab)
+        self.combo_fallback.addItems(["ignore", "force_sRGB"])  # 경고 UI는 보류
+        self.chk_anim_convert = QCheckBox("애니메이션 프레임 sRGB 변환", self.color_tab)
+        self.chk_thumb_convert = QCheckBox("썸네일 sRGB 변환", self.color_tab)
+        form_color = QFormLayout()
+        form_color.addRow("ICC 무시", self.chk_icc_ignore)
+        form_color.addRow("ICC 없음 가정 색공간", self.combo_assumed)
+        form_color.addRow("미리보기 타깃", self.combo_target)
+        form_color.addRow("실패 시 폴백", self.combo_fallback)
+        form_color.addRow("애니메이션 변환", self.chk_anim_convert)
+        form_color.addRow("썸네일 변환", self.chk_thumb_convert)
+        color_layout.addLayout(form_color)
         # ----- 전체화면/오버레이 탭 -----
         self.fullscreen_tab = QWidget(self)
         self.tabs.addTab(self.fullscreen_tab, "전체화면")
@@ -321,9 +348,103 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
         )
-        buttons.accepted.connect(self._on_accept)
+        # 확인 버튼: 색상 설정 포함하여 전체 적용
+        def _apply_all_and_accept():
+            try:
+                self._apply_color_settings()
+            except Exception:
+                pass
+            try:
+                # 기존 단축키 저장/검증 로직은 별도 _on_accept에 있음 → 호출 유지
+                self._on_accept()
+            except Exception:
+                # 키 탭이 준비되지 않았으면 그냥 닫기
+                try:
+                    self.accept()
+                except Exception:
+                    pass
+        buttons.accepted.connect(_apply_all_and_accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+
+    def _apply_values_from_viewer(self):
+        viewer = self.parent() if hasattr(self, 'parent') else None
+        if viewer is None:
+            return
+        # 색상 탭: 로드
+        try:
+            self.chk_icc_ignore.setChecked(bool(getattr(viewer, "_icc_ignore_embedded", False)))
+        except Exception:
+            self.chk_icc_ignore.setChecked(False)
+        try:
+            assumed = str(getattr(viewer, "_assumed_colorspace", "sRGB"))
+            self.combo_assumed.setCurrentIndex({"sRGB":0, "Display P3":1, "Adobe RGB":2}.get(assumed, 0))
+        except Exception:
+            self.combo_assumed.setCurrentIndex(0)
+        try:
+            target = str(getattr(viewer, "_preview_target", "sRGB"))
+            self.combo_target.setCurrentIndex({"sRGB":0, "Display P3":1, "Adobe RGB":2}.get(target, 0))
+        except Exception:
+            self.combo_target.setCurrentIndex(0)
+        try:
+            fb = str(getattr(viewer, "_fallback_policy", "ignore"))
+            self.combo_fallback.setCurrentIndex({"ignore":0, "force_sRGB":1}.get(fb, 0))
+        except Exception:
+            self.combo_fallback.setCurrentIndex(0)
+        try:
+            self.chk_anim_convert.setChecked(bool(getattr(viewer, "_convert_movie_frames_to_srgb", True)))
+        except Exception:
+            self.chk_anim_convert.setChecked(True)
+        try:
+            self.chk_thumb_convert.setChecked(bool(getattr(viewer, "_thumb_convert_to_srgb", True)))
+        except Exception:
+            self.chk_thumb_convert.setChecked(True)
+
+    def _apply_color_settings(self):
+        viewer = self.parent() if hasattr(self, 'parent') else None
+        if viewer is None:
+            return
+        # 색상 탭: 저장
+        try:
+            viewer._icc_ignore_embedded = bool(self.chk_icc_ignore.isChecked())
+        except Exception:
+            pass
+        try:
+            idx = int(self.combo_assumed.currentIndex())
+            viewer._assumed_colorspace = ("sRGB" if idx == 0 else ("Display P3" if idx == 1 else "Adobe RGB"))
+        except Exception:
+            pass
+        try:
+            idx = int(self.combo_target.currentIndex())
+            viewer._preview_target = ("sRGB" if idx == 0 else ("Display P3" if idx == 1 else "Adobe RGB"))
+        except Exception:
+            pass
+        try:
+            viewer._fallback_policy = ("ignore" if int(self.combo_fallback.currentIndex()) == 0 else "force_sRGB")
+        except Exception:
+            pass
+        try:
+            viewer._convert_movie_frames_to_srgb = bool(self.chk_anim_convert.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._thumb_convert_to_srgb = bool(self.chk_thumb_convert.isChecked())
+        except Exception:
+            pass
+        # 이미지 서비스에도 즉시 반영
+        try:
+            if hasattr(viewer, 'image_service') and viewer.image_service is not None:
+                svc = viewer.image_service
+                svc._icc_ignore_embedded = bool(getattr(viewer, "_icc_ignore_embedded", False))
+                svc._assumed_colorspace = str(getattr(viewer, "_assumed_colorspace", "sRGB"))
+                svc._preview_target = str(getattr(viewer, "_preview_target", "sRGB"))
+                svc._fallback_policy = str(getattr(viewer, "_fallback_policy", "ignore"))
+        except Exception:
+            pass
+        try:
+            viewer.save_settings()
+        except Exception:
+            pass
 
         # 탭 변경 시 크기 최적화
         try:
@@ -405,6 +526,11 @@ class SettingsDialog(QDialog):
     def load_from_viewer(self, viewer):
         # viewer 참조 저장(지연 로드시 사용)
         self._viewer_for_keys = viewer
+        # 색상 탭 값 먼저 반영
+        try:
+            self._apply_values_from_viewer()
+        except Exception:
+            pass
         # 일반 탭 값 반영
         try:
             self.chk_scan_after_open.setChecked(bool(getattr(viewer, "_open_scan_dir_after_open", True)))

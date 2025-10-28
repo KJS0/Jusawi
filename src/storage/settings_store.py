@@ -211,6 +211,35 @@ def load_settings(viewer) -> None:
         except Exception:
             viewer._default_view_mode = "fit"
         viewer._remember_last_view_mode = True
+        try:
+            viewer._statusbar_show_profile_details = bool(viewer.settings.value("status/show_profile_details", False, bool))
+        except Exception:
+            viewer._statusbar_show_profile_details = False
+        # 색상 관리 기본값 로드
+        try:
+            viewer._icc_ignore_embedded = bool(viewer.settings.value("color/icc_ignore_embedded", False, bool))
+        except Exception:
+            viewer._icc_ignore_embedded = False
+        try:
+            viewer._assumed_colorspace = str(viewer.settings.value("color/assumed_colorspace", "sRGB", str))
+        except Exception:
+            viewer._assumed_colorspace = "sRGB"
+        try:
+            viewer._preview_target = str(viewer.settings.value("color/preview_target", "sRGB", str))
+        except Exception:
+            viewer._preview_target = "sRGB"
+        try:
+            viewer._fallback_policy = str(viewer.settings.value("color/fallback_policy", "ignore", str))
+        except Exception:
+            viewer._fallback_policy = "ignore"
+        try:
+            viewer._convert_movie_frames_to_srgb = bool(viewer.settings.value("color/anim_convert", True, bool))
+        except Exception:
+            viewer._convert_movie_frames_to_srgb = True
+        try:
+            viewer._thumb_convert_to_srgb = bool(viewer.settings.value("color/thumb_convert", True, bool))
+        except Exception:
+            viewer._thumb_convert_to_srgb = True
         # Open/Animation/Dir/TIFF 옵션 기본값 로드
         try:
             viewer._open_scan_dir_after_open = bool(viewer.settings.value("open/scan_dir_after_open", True, bool))
@@ -555,6 +584,13 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("view/double_click_action", str(getattr(viewer, "_double_click_action", 'toggle')))
         viewer.settings.setValue("view/middle_click_action", str(getattr(viewer, "_middle_click_action", 'none')))
         viewer.settings.setValue("view/preserve_visual_size_on_dpr_change", bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
+        # 색상 관리 저장
+        viewer.settings.setValue("color/icc_ignore_embedded", bool(getattr(viewer, "_icc_ignore_embedded", False)))
+        viewer.settings.setValue("color/assumed_colorspace", str(getattr(viewer, "_assumed_colorspace", "sRGB")))
+        viewer.settings.setValue("color/preview_target", str(getattr(viewer, "_preview_target", "sRGB")))
+        viewer.settings.setValue("color/fallback_policy", str(getattr(viewer, "_fallback_policy", "ignore")))
+        viewer.settings.setValue("color/anim_convert", bool(getattr(viewer, "_convert_movie_frames_to_srgb", True)))
+        viewer.settings.setValue("color/thumb_convert", bool(getattr(viewer, "_thumb_convert_to_srgb", True)))
         # 지능형 스케일 프리젠 저장
         viewer.settings.setValue("view/pregen_scales_enabled", bool(getattr(viewer, "_pregen_scales_enabled", False)))
         try:
@@ -594,6 +630,8 @@ def save_settings(viewer) -> None:
         # 자동화 저장
         viewer.settings.setValue("ai/auto_on_open", bool(getattr(viewer, "_auto_ai_on_open", False)))
         viewer.settings.setValue("ai/auto_delay_ms", int(getattr(viewer, "_auto_ai_delay_ms", 0)))
+        # 표시/정보 상세
+        viewer.settings.setValue("status/show_profile_details", bool(getattr(viewer, "_statusbar_show_profile_details", False)))
     except Exception:
         pass
 

@@ -404,6 +404,9 @@ class JusawiViewer(QMainWindow):
         except Exception:
             self._nav = None
 
+        # 색상 A/B 비교용 상태
+        self._color_ab_show_original = False
+
     def clamp(self, value, min_v, max_v):
         return util_clamp(value, min_v, max_v)
 
@@ -780,6 +783,34 @@ class JusawiViewer(QMainWindow):
         # 숫자/문자 키 우선 처리 외에 보기/줌 단축키가 정상 동작하도록 포커스 설정
         try:
             self.image_display_area.setFocus()
+        except Exception:
+            pass
+
+    # ----- 색상 보기 A/B 토글 -----
+    def toggle_color_ab(self):
+        try:
+            self._color_ab_show_original = not bool(getattr(self, "_color_ab_show_original", False))
+        except Exception:
+            self._color_ab_show_original = False
+        # 이미지 서비스에 정책 반영
+        try:
+            if hasattr(self, "image_service") and self.image_service is not None:
+                self.image_service._color_view_mode = 'original' if self._color_ab_show_original else 'managed'
+        except Exception:
+            pass
+        # 현재 이미지 재적용(캐시를 우회하도록 무효화 후 재로딩)
+        try:
+            cur = getattr(self, "current_image_path", None)
+            if cur and os.path.isfile(cur):
+                try:
+                    self.image_service.invalidate_path(cur)
+                except Exception:
+                    pass
+                self.load_image(cur, source='ab-toggle')
+                try:
+                    self.statusBar().showMessage("원본 색상 보기" if self._color_ab_show_original else "관리된 색상 보기", 1500)
+                except Exception:
+                    pass
         except Exception:
             pass
 

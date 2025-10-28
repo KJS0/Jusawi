@@ -141,6 +141,12 @@ class ImageService(QObject):
         self._anim_frame_count: dict[str, int] = {}
         # 저장 위임 서비스
         self._save_service = SaveService()
+        # 색상 관리 정책(뷰어 설정/단축키로 제어)
+        self._color_view_mode = 'managed'  # 'managed' | 'original'
+        self._icc_ignore_embedded = False
+        self._assumed_colorspace = 'sRGB'  # ICC 미탑재/무시 시 가정 색공간
+        self._preview_target = 'sRGB'      # sRGB | Display P3 | Adobe RGB
+        self._fallback_policy = 'ignore'   # 'warn' | 'ignore' | 'force_sRGB'
 
     def set_cache_limits(self, image_cache_max_bytes: int | None = None, scaled_cache_max_bytes: int | None = None) -> None:
         try:
@@ -232,7 +238,7 @@ class ImageService(QObject):
                 pass
             return path, cached, True, ""
         try:
-            img, ok, err = _read_qimage_with_exif_auto_transform(path)
+            img, ok, err = self._read_qimage_with_exif_auto_transform_with_policy(path)
             if not ok:
                 try:
                     _log.error("load_decode_fail | file=%s | err=%s", os.path.basename(path), err or "")
@@ -331,7 +337,10 @@ class ImageService(QObject):
                 img = reader.read()
                 if img.isNull():
                     return None
-                img = _convert_to_srgb(img)
+                try:
+                    img = self._convert_image_for_display(img)  # type: ignore[attr-defined]
+                except Exception:
+                    img = _convert_to_srgb(img)
                 self._scaled_cache.put(key, img)
                 return img
             except Exception:
@@ -400,7 +409,10 @@ class ImageService(QObject):
             img = reader.read()
             if img.isNull():
                 return None
-            img = _convert_to_srgb(img)
+            try:
+                img = self._convert_image_for_display(img)  # type: ignore[attr-defined]
+            except Exception:
+                img = _convert_to_srgb(img)
             self._scaled_cache.put(key, img)
             return img
         except Exception:
@@ -615,7 +627,10 @@ class ImageService(QObject):
             img = reader.read()
             if img.isNull():
                 return None, False, reader.errorString() or "프레임을 불러올 수 없습니다."
-            img = _convert_to_srgb(img)
+            try:
+                img = self._convert_image_for_display(img)  # type: ignore[attr-defined]
+            except Exception:
+                img = _convert_to_srgb(img)
             return img, True, ""
         except Exception as e:
             return None, False, str(e)
@@ -704,6 +719,29 @@ class ImageService(QObject):
                             quality: int = 95) -> tuple[bool, str]:
         return self._save_service.save_with_transform(img, src_path, dest_path, rotation_degrees, flip_horizontal, flip_vertical, quality)
 
+    # --- 색상 관리: 인스턴스 메서드 ---
+    def _convert_image_for_display(self, img: QImage) -> QImage:
+        try:
+            return _apply_color_policy(self, img)
+        except Exception:
+            return _convert_to_srgb(img)
+
+    def _read_qimage_with_exif_auto_transform_with_policy(self, path: str) -> tuple[QImage, bool, str]:
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        img = reader.read()
+        if img.isNull():
+            try:
+                _log.warning("qimage_read_null | file=%s | qerr=%s", os.path.basename(path), reader.errorString() or "")
+            except Exception:
+                pass
+            return QImage(), False, reader.errorString() or "이미지를 불러올 수 없습니다."
+        try:
+            img2 = self._convert_image_for_display(img)
+        except Exception:
+            img2 = _convert_to_srgb(img)
+        return img2, True, ""
+
 
 def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]:
     reader = QImageReader(path)
@@ -718,6 +756,23 @@ def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]
         return QImage(), False, reader.errorString() or "이미지를 불러올 수 없습니다."
     img = _convert_to_srgb(img)
     return img, True, ""
+
+
+def _read_qimage_with_exif_auto_transform_with_policy(self, path: str) -> tuple[QImage, bool, str]:
+    reader = QImageReader(path)
+    reader.setAutoTransform(True)
+    img = reader.read()
+    if img.isNull():
+        try:
+            _log.warning("qimage_read_null | file=%s | qerr=%s", os.path.basename(path), reader.errorString() or "")
+        except Exception:
+            pass
+        return QImage(), False, reader.errorString() or "이미지를 불러올 수 없습니다."
+    try:
+        img2 = _apply_color_policy(self, img)
+    except Exception:
+        img2 = _convert_to_srgb(img)
+    return img2, True, ""
 
 
 def _convert_to_srgb(img: QImage) -> QImage:
@@ -736,6 +791,65 @@ def _convert_to_srgb(img: QImage) -> QImage:
             converted = img.convertToColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgb))
             if not converted.isNull():
                 return converted
+        return img
+    except Exception:
+        return img
+
+
+def _named_colorspace_from_string(name: str) -> QColorSpace | None:
+    try:
+        n = (name or "").strip().lower()
+        if n in ("srgb", "s-rgb", "rec709", "rec.709"):
+            return QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+        if n in ("display p3", "displayp3", "p3"):
+            return QColorSpace(QColorSpace.NamedColorSpace.DisplayP3)
+        if n in ("adobergb", "adobe rgb", "adobe-rgb"):
+            return QColorSpace(QColorSpace.NamedColorSpace.AdobeRgb)
+        return None
+    except Exception:
+        return None
+
+
+def _apply_color_policy(image_service: "ImageService", img: QImage) -> QImage:
+    """ImageService 설정에 따라 색공간을 변환한다."""
+    try:
+        mode = str(getattr(image_service, "_color_view_mode", "managed") or "managed")
+        if mode == "original":
+            return img
+        # ICC 무시 또는 미탑재시 가정 색공간 부여
+        ignore_icc = bool(getattr(image_service, "_icc_ignore_embedded", False))
+        try:
+            cs = img.colorSpace()
+        except Exception:
+            cs = QColorSpace()
+        if ignore_icc or (not cs.isValid()):
+            assumed = str(getattr(image_service, "_assumed_colorspace", "sRGB") or "sRGB")
+            assumed_cs = _named_colorspace_from_string(assumed)
+            if assumed_cs is not None:
+                try:
+                    img.setColorSpace(assumed_cs)
+                    cs = img.colorSpace()
+                except Exception:
+                    pass
+        # 타깃 변환(소프트 프루핑/뷰 변환)
+        target_name = str(getattr(image_service, "_preview_target", "sRGB") or "sRGB")
+        target_cs = _named_colorspace_from_string(target_name) or QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+        try:
+            if cs.isValid() and cs != target_cs:
+                converted = img.convertToColorSpace(target_cs)
+                if not converted.isNull():
+                    return converted
+        except Exception:
+            pass
+        # 폴백 정책
+        pol = str(getattr(image_service, "_fallback_policy", "ignore") or "ignore")
+        if pol == "force_sRGB":
+            try:
+                forced = img.convertToColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgb))
+                if not forced.isNull():
+                    return forced
+            except Exception:
+                pass
         return img
     except Exception:
         return img
