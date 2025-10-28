@@ -31,11 +31,58 @@ else:  # Windows가 아닌 OS
     strcmplogicalw_func = None
 
 def windows_style_sort_key(item1, item2):
-    """ StrCmpLogicalW를 사용한 비교 함수, 실패 시 기본 비교 """
+    """Windows 탐색기(논리) 정렬 비교 함수.
+    - 가능하면 StrCmpLogicalW 사용
+    - 불가 시 숫자를 숫자처럼 비교하는 자연 정렬로 폴백(대소문자 무시)
+    """
     if strcmplogicalw_func:
-        return strcmplogicalw_func(item1, item2)
-    if item1 < item2: return -1
-    if item1 > item2: return 1
+        try:
+            return int(strcmplogicalw_func(item1, item2))
+        except Exception:
+            pass
+    # 폴백: 숫자 인식 자연 비교 (case-insensitive)
+    try:
+        import re
+        def _tokenize(s: str):
+            parts = re.split(r'(\d+)', s or '')
+            out = []
+            for p in parts:
+                if p.isdigit():
+                    try:
+                        out.append(int(p))
+                    except Exception:
+                        out.append(p)
+                else:
+                    out.append(p.lower())
+            return out
+        a = _tokenize(item1)
+        b = _tokenize(item2)
+        # 순차 비교
+        for x, y in zip(a, b):
+            if x == y:
+                continue
+            if isinstance(x, int) and isinstance(y, int):
+                return -1 if x < y else 1
+            # str vs int 또는 str vs str
+            xs = str(x)
+            ys = str(y)
+            if xs < ys:
+                return -1
+            if xs > ys:
+                return 1
+            # 동일 처리
+        # 길이 비교
+        if len(a) < len(b):
+            return -1
+        if len(a) > len(b):
+            return 1
+    except Exception:
+        pass
+    # 최종 폴백: 단순 사전식(CI)
+    s1 = (item1 or '').lower()
+    s2 = (item2 or '').lower()
+    if s1 < s2: return -1
+    if s1 > s2: return 1
     return 0
 
 def open_file_dialog_util(parent_widget, initial_dir=None):

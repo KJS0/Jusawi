@@ -278,6 +278,11 @@ class JusawiViewer(QMainWindow):
         self._scale_apply_timer.setInterval(30)
         self._scale_apply_timer.timeout.connect(self._apply_scaled_pixmap_now)
         self._scale_apply_delay_ms = 30
+        # 자동 업그레이드 지연(ms) 및 일시정지 플래그
+        self._fullres_upgrade_delay_ms = 120
+        self._pause_auto_upgrade = False
+        # 프리뷰 헤드룸 배율(1.0~1.2)
+        self._preview_headroom = 1.0
         # 원본 풀해상도 이미지 보관(저장/고배율 표시용)
         self._fullres_image = None
         # 현재 픽스맵이 스케일 프리뷰인지 여부(원본 업그레이드 필요 판단용)
@@ -936,6 +941,91 @@ class JusawiViewer(QMainWindow):
 
     def _on_set_rating(self, n: int):
         return rating_bar.set_rating(self, n)
+    
+    # ----- 새 단축키 핸들러 -----
+    def upgrade_fullres_now(self) -> None:
+        try:
+            if self._fullres_upgrade_timer.isActive():
+                self._fullres_upgrade_timer.stop()
+        except Exception:
+            pass
+        try:
+            prev_pause = bool(getattr(self, "_pause_auto_upgrade", False))
+            self._pause_auto_upgrade = False
+            ds.upgrade_to_fullres_if_needed(self)
+            self._pause_auto_upgrade = prev_pause
+        except Exception:
+            pass
+
+    # (Shift+U 제거) 자동 업그레이드 토글 핸들러 제거
+
+    def revert_to_preview(self) -> None:
+        try:
+            path = self.current_image_path or ""
+            if not path:
+                return
+            if self._is_current_file_animation() or getattr(self, "_movie", None):
+                return
+            view = self.image_display_area
+            # 앵커 보존: 뷰포트 중심의 아이템 좌표 저장
+            item_anchor_point = None
+            try:
+                pix_item = getattr(view, "_pix_item", None)
+                if pix_item:
+                    vp_center = view.viewport().rect().center()
+                    scene_center = view.mapToScene(vp_center)
+                    item_anchor_point = pix_item.mapFromScene(scene_center)
+            except Exception:
+                item_anchor_point = None
+            # 업그레이드 단계에서도 동일 앵커를 사용하도록 저장
+            try:
+                setattr(self, "_pending_anchor_point", item_anchor_point)
+            except Exception:
+                pass
+            vm = str(getattr(view, "_view_mode", "fit") or "fit")
+            from PyQt6.QtGui import QPixmap  # type: ignore[import]
+            try:
+                dpr = float(view.viewport().devicePixelRatioF())
+            except Exception:
+                try:
+                    dpr = float(self.devicePixelRatioF())
+                except Exception:
+                    dpr = 1.0
+            vw = max(1, int(view.viewport().width()))
+            vh = max(1, int(view.viewport().height()))
+            headroom = float(getattr(self, "_preview_headroom", 1.0) or 1.0)
+            img = self.image_service.get_scaled_for_viewport(path, vw, vh, view_mode=vm, dpr=dpr, headroom=headroom)
+            if img is None or img.isNull():
+                return
+            pm = QPixmap.fromImage(img)
+            view.updatePixmapFrame(pm)
+            try:
+                ow = int(getattr(self, "_fullres_image", None).width()) if getattr(self, "_fullres_image", None) is not None else pm.width()
+                sw = max(1, int(pm.width()))
+                src_scale = min(1.0, float(sw) / float(max(1, ow)))
+            except Exception:
+                src_scale = 1.0
+            view.set_source_scale(src_scale)
+            # 보기 모드 재적용 및 앵커 재중앙
+            try:
+                if vm in ("fit", "fit_width", "fit_height"):
+                    view.apply_current_view_mode()
+                if item_anchor_point is not None and getattr(view, "_pix_item", None):
+                    new_scene_point = view._pix_item.mapToScene(item_anchor_point)
+                    view.centerOn(new_scene_point)
+            except Exception:
+                pass
+            self._is_scaled_preview = True
+            if not getattr(self, "_pause_auto_upgrade", False):
+                try:
+                    if self._fullres_upgrade_timer.isActive():
+                        self._fullres_upgrade_timer.stop()
+                    delay = int(getattr(self, "_fullres_upgrade_delay_ms", 120))
+                    self._fullres_upgrade_timer.start(max(0, delay))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _on_set_flag(self, f: str):
         return rating_bar.set_flag(self, f)
@@ -1204,6 +1294,8 @@ class JusawiViewer(QMainWindow):
         ds.apply_scaled_pixmap_now(self)
 
     def _upgrade_to_fullres_if_needed(self):
+        if getattr(self, "_pause_auto_upgrade", False):
+            return
         ds.upgrade_to_fullres_if_needed(self)
 
     def _handle_dirty_before_action(self) -> bool:

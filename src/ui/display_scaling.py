@@ -189,15 +189,16 @@ def apply_scaled_pixmap_now(viewer: "JusawiViewer") -> None:
         return
     try:
         ss = float(getattr(viewer.image_display_area, "_source_scale", 1.0) or 1.0)
-        # 풀해상도가 아직 없거나 소스 스케일이 1 미만, 혹은 명시적 스케일 프리뷰 플래그가 켜져 있으면 업그레이드 예약
-        if ss < 1.0 or getattr(viewer, "_fullres_image", None) is None or viewer._fullres_image.isNull() or getattr(viewer, "_is_scaled_preview", False):
+        need_upgrade = (ss < 1.0) or getattr(viewer, "_fullres_image", None) is None or getattr(viewer, "_is_scaled_preview", False)
+        if need_upgrade and not bool(getattr(viewer, "_pause_auto_upgrade", False)):
             if viewer._fullres_upgrade_timer.isActive():
                 viewer._fullres_upgrade_timer.stop()
-            viewer._fullres_upgrade_timer.start(0)
-            # 이벤트 루프 다음 틱에 업그레이드 시도
+            delay = int(getattr(viewer, "_fullres_upgrade_delay_ms", 120))
+            viewer._fullres_upgrade_timer.start(max(0, delay))
+            # 이벤트 루프 다음 틱에 업그레이드 시도(지연 반영)
             try:
                 from PyQt6.QtCore import QTimer  # type: ignore[import]
-                QTimer.singleShot(0, getattr(viewer, "_upgrade_to_fullres_if_needed", lambda: None))
+                QTimer.singleShot(max(0, delay), getattr(viewer, "_upgrade_to_fullres_if_needed", lambda: None))
             except Exception:
                 pass
     except Exception:
@@ -234,12 +235,17 @@ def upgrade_to_fullres_if_needed(viewer: "JusawiViewer") -> None:
                 pass
         item_anchor_point = None
         try:
-            view = viewer.image_display_area
-            pix_item = getattr(view, "_pix_item", None)
-            if pix_item:
-                vp_center = view.viewport().rect().center()
-                scene_center = view.mapToScene(vp_center)
-                item_anchor_point = pix_item.mapFromScene(scene_center)
+            # Ctrl+U 등 프리뷰 단계에서 저장한 앵커 우선 사용
+            saved_anchor = getattr(viewer, "_pending_anchor_point", None)
+            if saved_anchor is not None:
+                item_anchor_point = saved_anchor
+            else:
+                view = viewer.image_display_area
+                pix_item = getattr(view, "_pix_item", None)
+                if pix_item:
+                    vp_center = view.viewport().rect().center()
+                    scene_center = view.mapToScene(vp_center)
+                    item_anchor_point = pix_item.mapFromScene(scene_center)
         except Exception:
             item_anchor_point = None
         pm = QPixmap.fromImage(viewer._fullres_image)
@@ -262,6 +268,12 @@ def upgrade_to_fullres_if_needed(viewer: "JusawiViewer") -> None:
             if item_anchor_point is not None and getattr(viewer.image_display_area, "_pix_item", None):
                 new_scene_point = viewer.image_display_area._pix_item.mapToScene(item_anchor_point)
                 viewer.image_display_area.centerOn(new_scene_point)
+        except Exception:
+            pass
+        # 사용한 앵커는 일회성으로 소거
+        try:
+            if getattr(viewer, "_pending_anchor_point", None) is not None:
+                viewer._pending_anchor_point = None
         except Exception:
             pass
         # 좌표/상태 갱신: 현재 커서 위치 기준으로 동기화

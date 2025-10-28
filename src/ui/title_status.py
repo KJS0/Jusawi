@@ -84,11 +84,12 @@ def update_status_left(viewer) -> None:
                                 need_upgrade = True
                     except Exception:
                         pass
-                if need_upgrade:
+                if need_upgrade and not bool(getattr(viewer, "_pause_auto_upgrade", False)):
                     try:
                         if viewer._fullres_upgrade_timer.isActive():
                             viewer._fullres_upgrade_timer.stop()
-                        viewer._fullres_upgrade_timer.start(120)
+                        delay = int(getattr(viewer, "_fullres_upgrade_delay_ms", 120))
+                        viewer._fullres_upgrade_timer.start(max(0, delay))
                     except Exception:
                         pass
     except Exception:

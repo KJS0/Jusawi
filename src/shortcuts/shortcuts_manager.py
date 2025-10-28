@@ -32,7 +32,7 @@ COMMANDS: List[Command] = [
     Command("clear_recent", "최근 목록 비우기", "최근 파일/폴더 목록을 지웁니다", "파일", "clear_recent", ["Ctrl+Alt+Shift+R"]),
 
     # 캐시 비우기
-    Command("clear_caches", "캐시 비우기", "이미지/스케일/썸네일 캐시 삭제", "파일", "clear_caches", ["Ctrl+Shift+Delete"]),
+    Command("clear_caches", "캐시 비우기", "이미지/스케일/썸네일 캐시 삭제", "파일", "clear_caches", ["Ctrl+Shift+Delete", "Ctrl+Shift+C"]),
 
     Command("show_prev_image", "이전 이미지", "이전 파일로 이동", "탐색", "show_prev_image", ["Left", "PageUp"]),
     # Space는 애니메이션 재생/일시정지용으로 사용하므로 기본 매핑에서 제외
@@ -47,6 +47,10 @@ COMMANDS: List[Command] = [
     # Ctrl+Plus/Ctrl+Equal 모두 허용 + 단일 키(=/-)도 허용
     Command("zoom_in", "확대", "점진 확대", "보기", "zoom_in", ["=", "Ctrl++", "Ctrl+="]),
     Command("zoom_out", "축소", "점진 축소", "보기", "zoom_out", ["-", "Ctrl+-", "Ctrl+Minus", "Ctrl+Subtract"]),
+
+    # 원본 업그레이드/프리뷰 제어
+    Command("upgrade_fullres_now", "원본 업그레이드 강제", "지연 없이 즉시 원본으로 교체", "보기", "upgrade_fullres_now", ["U"]),
+    Command("revert_to_preview", "프리뷰로 되돌리기", "현재 화면 배율에 맞춘 프리뷰로 재전환", "보기", "revert_to_preview", ["Ctrl+U"]),
 
     # 회전/반전 기본 단축키 업데이트
     Command("rotate_ccw_90", "왼쪽 90° 회전", "반시계 방향 회전", "편집", "rotate_ccw_90", ["["]),

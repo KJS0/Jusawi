@@ -166,7 +166,11 @@ class ImageService(QObject):
         image_files, cur_idx = scan_directory_util(dir_path, current_image_path)
         # 뷰어 설정(정렬/숨김/자연정렬)에 따른 후처리 훅: 호출자가 속성 제공 시 적용
         try:
-            owner = getattr(self, 'parent', None)
+            # QObject의 parent() 메서드를 통해 부모 뷰어를 가져온다.
+            try:
+                owner = self.parent()
+            except Exception:
+                owner = None
         except Exception:
             owner = None
         try:
@@ -195,22 +199,25 @@ class ImageService(QObject):
             # 정렬 방식 적용
             sort_mode = str(getattr(viewer, "_dir_sort_mode", "metadata")) if viewer is not None else "metadata"
             natural = bool(getattr(viewer, "_dir_natural_sort", True)) if viewer is not None else True
+            # 탐색기 정렬 선택 시 기준을 강제로 파일명으로 사용
+            if natural:
+                sort_mode = "name"
             if sort_mode == 'name':
                 try:
-                    if natural and os.name == 'nt':
-                        # Windows 자연 정렬
+                    base_names = [(os.path.basename(p), p) for p in image_files]
+                    if natural:
+                        # Windows 탐색기식 정렬을 OS 무관하게 사용(가능한 경우)
                         from ..utils.file_utils import windows_style_sort_key
-                        image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
-                        try:
-                            # 이름만으로 비교하는 자연 정렬 적용을 위해 cmp 형태 사용
-                            import functools
-                            image_files = sorted(image_files, key=functools.cmp_to_key(lambda a,b: windows_style_sort_key(os.path.basename(a), os.path.basename(b))))
-                        except Exception:
-                            pass
+                        import functools
+                        base_names.sort(key=functools.cmp_to_key(lambda a,b: windows_style_sort_key(a[0], b[0])))
+                        image_files = [p for (_, p) in base_names]
                     else:
                         image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
                 except Exception:
-                    pass
+                    try:
+                        image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
+                    except Exception:
+                        pass
             else:
                 # 메타데이터 모드: file_utils에서 기본(EXIF 우선) 정렬 적용됨
                 image_files = list(image_files)

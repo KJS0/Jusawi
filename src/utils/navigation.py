@@ -175,11 +175,13 @@ def load_image_at_current_index(viewer) -> None:
         # 함수형 경로에서도 동일하게 업그레이드 예약
         try:
             if viewer.load_successful and not viewer._is_current_file_animation() and not getattr(viewer, "_movie", None):
-                if viewer._fullres_upgrade_timer.isActive():
-                    viewer._fullres_upgrade_timer.stop()
-                viewer._fullres_upgrade_timer.start(100)
-                from PyQt6.QtCore import QTimer  # type: ignore[import]
-                QTimer.singleShot(100, getattr(viewer, "_upgrade_to_fullres_if_needed", lambda: None))
+                if not bool(getattr(viewer, "_pause_auto_upgrade", False)):
+                    if viewer._fullres_upgrade_timer.isActive():
+                        viewer._fullres_upgrade_timer.stop()
+                    delay = int(getattr(viewer, "_fullres_upgrade_delay_ms", 120))
+                    viewer._fullres_upgrade_timer.start(max(0, delay))
+                    from PyQt6.QtCore import QTimer  # type: ignore[import]
+                    QTimer.singleShot(max(0, delay), getattr(viewer, "_upgrade_to_fullres_if_needed", lambda: None))
         except Exception:
             pass
 

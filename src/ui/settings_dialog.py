@@ -101,7 +101,7 @@ class SettingsDialog(QDialog):
         self.combo_sort_mode = QComboBox(self.general_tab)
         self.combo_sort_mode.addItems(["메타데이터/촬영시간", "파일명"])
         self.combo_sort_name = QComboBox(self.general_tab)
-        self.combo_sort_name.addItems(["자연 정렬", "사전식 정렬"])
+        self.combo_sort_name.addItems(["윈도우 탐색기 정렬", "사전식 정렬"])
         try:
             # 파일명 정렬 변경 시 즉시 정렬 기준 활성/비활성 토글
             self.combo_sort_name.currentIndexChanged.connect(lambda _idx: self._on_sort_name_changed())
@@ -187,6 +187,11 @@ class SettingsDialog(QDialog):
         self.spin_cache_auto_shrink_pct = QSpinBox(self.perf_tab); self.spin_cache_auto_shrink_pct.setRange(10, 90); self.spin_cache_auto_shrink_pct.setSuffix(" %")
         self.spin_cache_gc_interval = QSpinBox(self.perf_tab); self.spin_cache_gc_interval.setRange(0, 600); self.spin_cache_gc_interval.setSuffix(" s")
         form_pf = QFormLayout()
+        # 대용량 이미지 프리뷰/업그레이드 정책
+        self.spin_upgrade_delay = QSpinBox(self.perf_tab); self.spin_upgrade_delay.setRange(0, 300); self.spin_upgrade_delay.setSuffix(" ms")
+        self.dbl_preview_headroom = QDoubleSpinBox(self.perf_tab); self.dbl_preview_headroom.setRange(1.0, 1.2); self.dbl_preview_headroom.setSingleStep(0.05); self.dbl_preview_headroom.setDecimals(2)
+        self.chk_disable_scaled_below_100 = QCheckBox("100% 이하에서도 원본 우선(프리뷰 비활성화)", self.perf_tab)
+        self.chk_preserve_visual_size_on_dpr = QCheckBox("DPI 변경 시 보이는 크기 유지", self.perf_tab)
         form_pf.addRow("썸네일 프리페치", self.chk_prefetch_thumbs)
         form_pf.addRow("이웃 프리로드 반경", self.spin_preload_radius)
         form_pf.addRow("지도 프리페치", self.chk_prefetch_map)
@@ -195,6 +200,10 @@ class SettingsDialog(QDialog):
         form_pf.addRow("프리로드 동시 작업 수", self.spin_preload_concurrency)
         form_pf.addRow("프리로드 재시도 횟수", self.spin_preload_retry)
         form_pf.addRow("프리로드 재시도 지연", self.spin_preload_retry_delay)
+        form_pf.addRow("업그레이드 지연", self.spin_upgrade_delay)
+        form_pf.addRow("프리뷰 여유 배율", self.dbl_preview_headroom)
+        form_pf.addRow("100% 이하 프리뷰 비활성화", self.chk_disable_scaled_below_100)
+        form_pf.addRow("DPI 변경 시 크기 유지", self.chk_preserve_visual_size_on_dpr)
         form_pf.addRow("원본 캐시 상한", self.spin_img_cache_mb)
         form_pf.addRow("스케일 캐시 상한", self.spin_scaled_cache_mb)
         form_pf.addRow("저메모리 시 축소 비율", self.spin_cache_auto_shrink_pct)
@@ -773,6 +782,22 @@ class SettingsDialog(QDialog):
             self.spin_drop_threshold.setValue(500)
         # 성능/프리페치 로드
         try:
+            self.spin_upgrade_delay.setValue(int(getattr(viewer, "_fullres_upgrade_delay_ms", 120)))
+        except Exception:
+            self.spin_upgrade_delay.setValue(120)
+        try:
+            self.dbl_preview_headroom.setValue(float(getattr(viewer, "_preview_headroom", 1.0)))
+        except Exception:
+            self.dbl_preview_headroom.setValue(1.0)
+        try:
+            self.chk_disable_scaled_below_100.setChecked(bool(getattr(viewer, "_disable_scaled_cache_below_100", False)))
+        except Exception:
+            self.chk_disable_scaled_below_100.setChecked(False)
+        try:
+            self.chk_preserve_visual_size_on_dpr.setChecked(bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
+        except Exception:
+            self.chk_preserve_visual_size_on_dpr.setChecked(False)
+        try:
             self.chk_prefetch_thumbs.setChecked(bool(getattr(viewer, "_enable_thumb_prefetch", True)))
         except Exception:
             self.chk_prefetch_thumbs.setChecked(True)
@@ -924,14 +949,16 @@ class SettingsDialog(QDialog):
             pass
         # 제외 규칙 삭제됨 — 저장 없음
         try:
-            viewer._dir_sort_mode = "metadata" if int(self.combo_sort_mode.currentIndex()) == 0 else "name"
+            is_explorer = (int(self.combo_sort_name.currentIndex()) == 0)
+            viewer._dir_natural_sort = bool(is_explorer)
+            # 탐색기 정렬이면 기준 강제 파일명
+            if is_explorer:
+                viewer._dir_sort_mode = "name"
+            else:
+                viewer._dir_sort_mode = ("metadata" if int(self.combo_sort_mode.currentIndex()) == 0 else "name")
         except Exception:
             pass
-        try:
-            viewer._dir_natural_sort = bool(int(self.combo_sort_name.currentIndex()) == 0)
-        except Exception:
-            pass
-        # 자연 정렬이면 기준 강제 파일명, UI 비활성화 정책 유지
+        # UI 상태(비활성화)는 즉시 반영
         try:
             self.combo_sort_mode.setEnabled(self.combo_sort_name.currentIndex() != 0)
         except Exception:
@@ -1087,6 +1114,23 @@ class SettingsDialog(QDialog):
             viewer._preload_priority = int(self.spin_preload_priority.value())
         except Exception:
             pass
+        # 성능/프리뷰 정책 적용
+        try:
+            viewer._fullres_upgrade_delay_ms = int(self.spin_upgrade_delay.value())
+        except Exception:
+            pass
+        try:
+            viewer._preview_headroom = float(self.dbl_preview_headroom.value())
+        except Exception:
+            pass
+        try:
+            viewer._disable_scaled_cache_below_100 = bool(self.chk_disable_scaled_below_100.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._preserve_visual_size_on_dpr_change = bool(self.chk_preserve_visual_size_on_dpr.isChecked())
+        except Exception:
+            pass
         try:
             viewer._preload_max_concurrency = int(self.spin_preload_concurrency.value())
         except Exception:
@@ -1163,7 +1207,17 @@ class SettingsDialog(QDialog):
 
     def _on_sort_name_changed(self):
         try:
-            self.combo_sort_mode.setEnabled(self.combo_sort_name.currentIndex() != 0)
+            is_explorer = (self.combo_sort_name.currentIndex() == 0)
+            # 윈도우 탐색기 정렬 선택 시 자동으로 정렬 기준을 파일명으로 강제하고 비활성화
+            if is_explorer:
+                try:
+                    if int(self.combo_sort_mode.currentIndex()) != 1:
+                        self.combo_sort_mode.setCurrentIndex(1)  # 파일명
+                except Exception:
+                    self.combo_sort_mode.setCurrentIndex(1)
+                self.combo_sort_mode.setEnabled(False)
+            else:
+                self.combo_sort_mode.setEnabled(True)
         except Exception:
             pass
 
@@ -1196,6 +1250,12 @@ class SettingsDialog(QDialog):
             self.spin_nav_throttle.setValue(100)
             self.chk_film_center.setChecked(True)
             self.combo_zoom_policy.setCurrentIndex(1)
+            # 성능/프리뷰 기본값
+            self.spin_upgrade_delay.setValue(120)
+            self.dbl_preview_headroom.setValue(1.0)
+            self.chk_disable_scaled_below_100.setChecked(False)
+            self.chk_preserve_visual_size_on_dpr.setChecked(False)
+            # 캐시/프리페치 기본값(이미 로드된 경우 유지)
             # 뷰어에 즉시 반영 및 저장
             viewer = getattr(self, "_viewer_for_keys", None)
             if viewer is not None:
