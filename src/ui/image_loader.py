@@ -64,8 +64,15 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                         mv.setLoopCount(0 if bool(getattr(viewer, "_anim_loop", True)) else 1)
                     except Exception:
                         pass
-                    # 자동 재생 설정 반영
-                    if bool(getattr(viewer, "_anim_autoplay", True)):
+                    # 자동 재생 설정 반영(파일 전환 시 유지 옵션 고려)
+                    keep = bool(getattr(viewer, "_anim_keep_state_on_switch", False))
+                    desired_play = bool(getattr(viewer, "_anim_autoplay", True))
+                    if keep:
+                        try:
+                            desired_play = bool(getattr(viewer, "_anim_is_playing", False))
+                        except Exception:
+                            pass
+                    if desired_play:
                         viewer._movie.start()
                         viewer._anim_is_playing = True
                     else:

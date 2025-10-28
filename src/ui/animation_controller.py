@@ -19,31 +19,63 @@ def is_current_file_animation(viewer: "JusawiViewer") -> bool:
 
 
 def prev_frame(viewer: "JusawiViewer") -> None:
-    if not is_current_file_animation(viewer):
-        return
-    try:
-        cur = getattr(viewer.image_display_area, "_current_frame_index", 0)
-        total = getattr(viewer.image_display_area, "_total_frames", -1)
-        new_index = max(0, cur - 1)
-        img, ok, err = viewer.image_service.load_frame(viewer.current_image_path, new_index)
-        if ok and img and not img.isNull():
-            viewer.image_display_area.setPixmap(QPixmap.fromImage(img))
-            viewer.image_display_area.set_animation_state(True, new_index, total)
-    except Exception:
-        pass
+    jump_frames(viewer, -1)
 
 
 def next_frame(viewer: "JusawiViewer") -> None:
+    jump_frames(viewer, +1)
+
+
+def _compute_target_index(viewer: "JusawiViewer", delta: int) -> tuple[int, int]:
+    cur = getattr(viewer.image_display_area, "_current_frame_index", 0)
+    total = getattr(viewer.image_display_area, "_total_frames", -1)
+    if isinstance(total, int) and total > 0:
+        loop = bool(getattr(viewer, "_anim_loop", True))
+        tgt = cur + int(delta)
+        if loop:
+            try:
+                tgt = tgt % total
+            except Exception:
+                tgt = max(0, min(total - 1, tgt))
+        else:
+            tgt = max(0, min(total - 1, tgt))
+    else:
+        tgt = max(0, cur + int(delta))
+    return int(tgt), int(total)
+
+
+def jump_frames(viewer: "JusawiViewer", delta: int) -> None:
     if not is_current_file_animation(viewer):
         return
     try:
-        cur = getattr(viewer.image_display_area, "_current_frame_index", 0)
-        total = getattr(viewer.image_display_area, "_total_frames", -1)
-        max_index = (total - 1) if isinstance(total, int) and total > 0 else (cur + 1)
-        new_index = min(max_index, cur + 1)
+        new_index, total = _compute_target_index(viewer, delta)
+        # QMovie 사용 중이면 우선 일시정지 후 점프 시도
+        mv = getattr(viewer, "_movie", None)
+        if mv is not None:
+            try:
+                mv.setPaused(True)
+                viewer._anim_is_playing = False
+            except Exception:
+                pass
+            jumped = False
+            try:
+                jumped = bool(mv.jumpToFrame(int(new_index)))
+            except Exception:
+                jumped = False
+            if jumped:
+                # frameChanged 시그널에서 화면 갱신이 이루어지므로 상태만 반영
+                try:
+                    viewer.image_display_area.set_animation_state(True, new_index, total)
+                except Exception:
+                    pass
+                return
+        # 폴백: 직접 프레임 로드
         img, ok, err = viewer.image_service.load_frame(viewer.current_image_path, new_index)
         if ok and img and not img.isNull():
-            viewer.image_display_area.setPixmap(QPixmap.fromImage(img))
+            try:
+                viewer.image_display_area.setPixmap(QPixmap.fromImage(img))
+            except Exception:
+                pass
             viewer.image_display_area.set_animation_state(True, new_index, total)
     except Exception:
         pass

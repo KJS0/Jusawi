@@ -518,9 +518,115 @@ class ImageView(QGraphicsView):
         self._is_animation = bool(is_animation)
         self._current_frame_index = max(0, int(current_index))
         self._total_frames = int(total_frames) if isinstance(total_frames, int) else -1
-        # 오버레이 제거: 별도 페인팅 없음
+        try:
+            self.viewport().update()
+        except Exception:
+            pass
 
     # paintEvent의 오버레이 렌더링 제거
+    def paintEvent(self, event):
+        try:
+            super().paintEvent(event)
+        except Exception:
+            try:
+                # super 호출 실패 시 기본 처리 방지
+                pass
+            except Exception:
+                pass
+        # 애니메이션 프레임 오버레이(옵션)
+        try:
+            win = self.window()
+            if not win or not bool(getattr(win, "_anim_overlay_enabled", False)):
+                return
+            if not bool(getattr(self, "_is_animation", False)):
+                return
+            total = int(getattr(self, "_total_frames", -1))
+            cur = int(getattr(self, "_current_frame_index", 0))
+            if total is not None and isinstance(total, int) and total <= 1:
+                return
+            # 표시 텍스트
+            show_index = bool(getattr(win, "_anim_overlay_show_index", True))
+            txt = f"{cur+1}/{total}" if (show_index and isinstance(total, int) and total > 0) else ""
+            # 위치/불투명도
+            pos = str(getattr(win, "_anim_overlay_position", "top-right") or "top-right")
+            try:
+                opacity = float(getattr(win, "_anim_overlay_opacity", 0.6))
+            except Exception:
+                opacity = 0.6
+            opacity = max(0.05, min(1.0, opacity))
+            # 페인터
+            from PyQt6.QtGui import QPainter, QFont, QPen  # type: ignore
+            from PyQt6.QtCore import QRect, QSize  # type: ignore
+            p = QPainter(self.viewport())
+            try:
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            except Exception:
+                pass
+            # 진행 바 그리기
+            show_bar = bool(getattr(win, "_anim_overlay_show_bar", True))
+            margin = 8
+            bar_h = 6
+            vp = self.viewport().rect()
+            # 텍스트 측정 대략치
+            font = self.font()
+            p.setFont(font)
+            metrics = p.fontMetrics()
+            text_w = metrics.horizontalAdvance(txt) if txt else 0
+            text_h = metrics.height() if txt else 0
+            pad_x, pad_y = 8, 4
+            box_w = text_w + pad_x * 2
+            box_h = text_h + pad_y * 2
+            # 위치 계산
+            x = vp.left() + margin
+            y = vp.top() + margin
+            if pos.endswith("right"):
+                x = vp.right() - margin - max(box_w, 120)
+            if pos.startswith("bottom"):
+                y = vp.bottom() - margin - (box_h + (bar_h + 6 if show_bar else 0))
+            # 배경 박스
+            bg_w = max(box_w, 120)
+            bg_h = box_h + (bar_h + 6 if show_bar else 0)
+            bg_rect = QRect(int(x), int(y), int(bg_w), int(bg_h))
+            p.save()
+            try:
+                p.setOpacity(opacity)
+            except Exception:
+                pass
+            from PyQt6.QtGui import QColor  # type: ignore
+            p.fillRect(bg_rect, QColor(0, 0, 0))
+            p.restore()
+            # 텍스트 그리기
+            if txt:
+                try:
+                    p.setPen(QPen(QColor(234, 234, 234)))
+                except Exception:
+                    pass
+                text_x = bg_rect.left() + (bg_rect.width() - text_w) // 2
+                text_y = bg_rect.top() + pad_y + text_h
+                p.drawText(int(text_x), int(text_y), txt)
+            # 진행 바
+            if show_bar and isinstance(total, int) and total > 0:
+                bar_rect = QRect(bg_rect.left() + 6, bg_rect.bottom() - bar_h - 6, bg_rect.width() - 12, bar_h)
+                # 배경
+                p.save()
+                try:
+                    p.setOpacity(max(0.2, opacity - 0.2))
+                except Exception:
+                    pass
+                p.fillRect(bar_rect, QColor(220, 220, 220))
+                p.restore()
+                # 진행
+                frac = 0.0
+                try:
+                    frac = float((cur + 1) / float(total))
+                except Exception:
+                    frac = 0.0
+                frac = max(0.0, min(1.0, frac))
+                prog_w = int(bar_rect.width() * frac)
+                prog_rect = QRect(bar_rect.left(), bar_rect.top(), prog_w, bar_rect.height())
+                p.fillRect(prog_rect, QColor(86, 156, 214))
+        except Exception:
+            pass
 
     # Events
     def wheelEvent(self, event):

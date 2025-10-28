@@ -591,6 +591,20 @@ class JusawiViewer(QMainWindow):
     def anim_next_frame(self):
         anim.next_frame(self)
 
+    def anim_jump_back_10(self):
+        try:
+            from . import animation_controller as _anim
+            _anim.jump_frames(self, -10)
+        except Exception:
+            pass
+
+    def anim_jump_forward_10(self):
+        try:
+            from . import animation_controller as _anim
+            _anim.jump_frames(self, +10)
+        except Exception:
+            pass
+
     def anim_toggle_play(self):
         anim.toggle_play(self)
 
@@ -751,6 +765,28 @@ class JusawiViewer(QMainWindow):
                 try:
                     if getattr(self, "_preload_only_when_idle", False):
                         self._idle_prefetch_timer.start()
+                except Exception:
+                    pass
+            # 비활성화 시 자동 일시정지(옵션)
+            if et in (QEvent.Type.WindowDeactivate, QEvent.Type.FocusOut, QEvent.Type.ApplicationStateChange):
+                try:
+                    if bool(getattr(self, "_anim_pause_on_unfocus", False)):
+                        mv = getattr(self, "_movie", None)
+                        if mv is not None:
+                            try:
+                                from PyQt6.QtGui import QMovie  # type: ignore
+                                if mv.state() == QMovie.MovieState.Running:
+                                    mv.setPaused(True)
+                                    self._anim_is_playing = False
+                            except Exception:
+                                pass
+                        else:
+                            if bool(getattr(self, "_anim_is_playing", False)):
+                                try:
+                                    self._anim_timer.stop()
+                                except Exception:
+                                    pass
+                                self._anim_is_playing = False
                 except Exception:
                     pass
         except Exception:
@@ -943,6 +979,19 @@ class JusawiViewer(QMainWindow):
             if map_click.handle_mouse_press(self, event):
                 event.accept()
                 return
+        except Exception:
+            pass
+        # 이미지 클릭으로 재생/일시정지(옵션)
+        try:
+            from PyQt6.QtCore import Qt as _Qt  # type: ignore
+            if bool(getattr(self, "_anim_click_toggle", False)):
+                if event.button() == _Qt.MouseButton.LeftButton and callable(getattr(self, "_is_current_file_animation", None)) and self._is_current_file_animation():
+                    try:
+                        self.anim_toggle_play()
+                        event.accept()
+                        return
+                    except Exception:
+                        pass
         except Exception:
             pass
         super().mousePressEvent(event)

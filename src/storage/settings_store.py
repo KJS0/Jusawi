@@ -272,6 +272,34 @@ def load_settings(viewer) -> None:
         except Exception:
             viewer._anim_loop = True
         try:
+            viewer._anim_keep_state_on_switch = bool(viewer.settings.value("anim/keep_state_on_switch", False, bool))
+        except Exception:
+            viewer._anim_keep_state_on_switch = False
+        try:
+            viewer._anim_pause_on_unfocus = bool(viewer.settings.value("anim/pause_on_unfocus", False, bool))
+        except Exception:
+            viewer._anim_pause_on_unfocus = False
+        try:
+            viewer._anim_click_toggle = bool(viewer.settings.value("anim/click_toggle", False, bool))
+        except Exception:
+            viewer._anim_click_toggle = False
+        try:
+            viewer._anim_overlay_enabled = bool(viewer.settings.value("anim/overlay/enabled", False, bool))
+        except Exception:
+            viewer._anim_overlay_enabled = False
+        try:
+            viewer._anim_overlay_show_index = bool(viewer.settings.value("anim/overlay/show_index", True, bool))
+        except Exception:
+            viewer._anim_overlay_show_index = True
+        try:
+            viewer._anim_overlay_position = str(viewer.settings.value("anim/overlay/position", "top-right", str))
+        except Exception:
+            viewer._anim_overlay_position = "top-right"
+        try:
+            viewer._anim_overlay_opacity = float(viewer.settings.value("anim/overlay/opacity", 0.6))
+        except Exception:
+            viewer._anim_overlay_opacity = 0.6
+        try:
             viewer._dir_sort_mode = viewer.settings.value("dir/sort_mode", "metadata", str)
             if viewer._dir_sort_mode not in ("metadata", "name"):
                 viewer._dir_sort_mode = "metadata"
@@ -551,6 +579,13 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("open/remember_last_dir", bool(getattr(viewer, "_remember_last_open_dir", True)))
         viewer.settings.setValue("anim/autoplay", bool(getattr(viewer, "_anim_autoplay", True)))
         viewer.settings.setValue("anim/loop", bool(getattr(viewer, "_anim_loop", True)))
+        viewer.settings.setValue("anim/keep_state_on_switch", bool(getattr(viewer, "_anim_keep_state_on_switch", False)))
+        viewer.settings.setValue("anim/pause_on_unfocus", bool(getattr(viewer, "_anim_pause_on_unfocus", False)))
+        viewer.settings.setValue("anim/click_toggle", bool(getattr(viewer, "_anim_click_toggle", False)))
+        viewer.settings.setValue("anim/overlay/enabled", bool(getattr(viewer, "_anim_overlay_enabled", False)))
+        viewer.settings.setValue("anim/overlay/show_index", bool(getattr(viewer, "_anim_overlay_show_index", True)))
+        viewer.settings.setValue("anim/overlay/position", str(getattr(viewer, "_anim_overlay_position", "top-right")))
+        viewer.settings.setValue("anim/overlay/opacity", float(getattr(viewer, "_anim_overlay_opacity", 0.6)))
         viewer.settings.setValue("dir/sort_mode", str(getattr(viewer, "_dir_sort_mode", "metadata")))
         viewer.settings.setValue("dir/natural_sort", bool(getattr(viewer, "_dir_natural_sort", True)))
         viewer.settings.setValue("dir/exclude_hidden_system", bool(getattr(viewer, "_dir_exclude_hidden_system", True)))

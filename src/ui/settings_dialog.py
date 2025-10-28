@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox,
-    QDialogButtonBox, QCheckBox, QWidget, QTabWidget, QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QApplication, QFormLayout, QFileDialog, QDoubleSpinBox
+    QDialogButtonBox, QCheckBox, QWidget, QTabWidget, QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QApplication, QFormLayout, QFileDialog, QDoubleSpinBox, QScrollArea
 )
 from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QKeySequence
@@ -29,12 +29,27 @@ class SettingsDialog(QDialog):
         # ----- 일반 탭 -----
         self.general_tab = QWidget(self)
         self.tabs.addTab(self.general_tab, "일반")
-        gen_layout = QVBoxLayout(self.general_tab)
+        # 일반 탭을 스크롤 가능하게 구성
+        gen_root = QVBoxLayout(self.general_tab)
+        try:
+            gen_root.setContentsMargins(0, 0, 0, 0)
+            gen_root.setSpacing(0)
+        except Exception:
+            pass
+        _gen_scroll = QScrollArea(self.general_tab)
+        try:
+            _gen_scroll.setWidgetResizable(True)
+        except Exception:
+            pass
+        _gen_page = QWidget()
+        _gen_scroll.setWidget(_gen_page)
+        gen_layout = QVBoxLayout(_gen_page)
         try:
             gen_layout.setContentsMargins(8, 8, 8, 8)
             gen_layout.setSpacing(8)
         except Exception:
             pass
+        gen_root.addWidget(_gen_scroll)
 
         # 파일 열기 관련
         self.chk_scan_after_open = QCheckBox("열기 후 폴더 자동 스캔", self.general_tab)
@@ -59,8 +74,27 @@ class SettingsDialog(QDialog):
         gen_layout.addWidget(QLabel("애니메이션", self.general_tab))
         self.chk_anim_autoplay = QCheckBox("자동 재생", self.general_tab)
         self.chk_anim_loop = QCheckBox("루프 재생", self.general_tab)
+        # 신규 옵션: 파일 전환 시 재생 상태 유지, 비활성화 시 일시정지, 클릭 토글, 프레임 오버레이
+        self.chk_anim_keep_state = QCheckBox("파일 전환 시 재생 상태 유지", self.general_tab)
+        self.chk_anim_pause_unfocus = QCheckBox("비활성화 시 자동 일시정지", self.general_tab)
+        self.chk_anim_click_toggle = QCheckBox("이미지 클릭으로 재생/일시정지", self.general_tab)
+        self.chk_anim_overlay_enable = QCheckBox("프레임 오버레이 표시", self.general_tab)
+        self.chk_anim_overlay_show_index = QCheckBox("프레임 번호/총 프레임 표시", self.general_tab)
+        self.combo_anim_overlay_pos = QComboBox(self.general_tab)
+        self.combo_anim_overlay_pos.addItems(["좌상", "우상", "좌하", "우하"])  # top-left/top-right/bottom-left/bottom-right
+        self.spin_anim_overlay_opacity = QDoubleSpinBox(self.general_tab); self.spin_anim_overlay_opacity.setRange(0.05, 1.0); self.spin_anim_overlay_opacity.setSingleStep(0.05)
+        # 배치
         gen_layout.addWidget(self.chk_anim_autoplay)
         gen_layout.addWidget(self.chk_anim_loop)
+        form_anim = QFormLayout()
+        form_anim.addRow("재생 상태 유지", self.chk_anim_keep_state)
+        form_anim.addRow("비활성화 시 일시정지", self.chk_anim_pause_unfocus)
+        form_anim.addRow("클릭으로 재생/일시정지", self.chk_anim_click_toggle)
+        form_anim.addRow("오버레이 표시", self.chk_anim_overlay_enable)
+        form_anim.addRow("프레임 텍스트", self.chk_anim_overlay_show_index)
+        form_anim.addRow("오버레이 위치", self.combo_anim_overlay_pos)
+        form_anim.addRow("오버레이 불투명도", self.spin_anim_overlay_opacity)
+        gen_layout.addLayout(form_anim)
 
         # 디렉터리 탐색 정렬/필터
         gen_layout.addWidget(QLabel("디렉터리 탐색", self.general_tab))
@@ -548,6 +582,35 @@ class SettingsDialog(QDialog):
             self.chk_anim_loop.setChecked(bool(getattr(viewer, "_anim_loop", True)))
         except Exception:
             self.chk_anim_loop.setChecked(True)
+        try:
+            self.chk_anim_keep_state.setChecked(bool(getattr(viewer, "_anim_keep_state_on_switch", False)))
+        except Exception:
+            self.chk_anim_keep_state.setChecked(False)
+        try:
+            self.chk_anim_pause_unfocus.setChecked(bool(getattr(viewer, "_anim_pause_on_unfocus", False)))
+        except Exception:
+            self.chk_anim_pause_unfocus.setChecked(False)
+        try:
+            self.chk_anim_click_toggle.setChecked(bool(getattr(viewer, "_anim_click_toggle", False)))
+        except Exception:
+            self.chk_anim_click_toggle.setChecked(False)
+        try:
+            self.chk_anim_overlay_enable.setChecked(bool(getattr(viewer, "_anim_overlay_enabled", False)))
+        except Exception:
+            self.chk_anim_overlay_enable.setChecked(False)
+        try:
+            self.chk_anim_overlay_show_index.setChecked(bool(getattr(viewer, "_anim_overlay_show_index", True)))
+        except Exception:
+            self.chk_anim_overlay_show_index.setChecked(True)
+        try:
+            pos = str(getattr(viewer, "_anim_overlay_position", "top-right"))
+            self.combo_anim_overlay_pos.setCurrentIndex({"top-left":0, "top-right":1, "bottom-left":2, "bottom-right":3}.get(pos, 1))
+        except Exception:
+            self.combo_anim_overlay_pos.setCurrentIndex(1)
+        try:
+            self.spin_anim_overlay_opacity.setValue(float(getattr(viewer, "_anim_overlay_opacity", 0.6)))
+        except Exception:
+            self.spin_anim_overlay_opacity.setValue(0.6)
         # 세션/최근 로드
         try:
             pol = str(getattr(viewer, "_startup_restore_policy", "always"))
@@ -827,6 +890,26 @@ class SettingsDialog(QDialog):
             pass
         try:
             viewer._anim_loop = bool(self.chk_anim_loop.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._anim_keep_state_on_switch = bool(self.chk_anim_keep_state.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._anim_pause_on_unfocus = bool(self.chk_anim_pause_unfocus.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._anim_click_toggle = bool(self.chk_anim_click_toggle.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._anim_overlay_enabled = bool(self.chk_anim_overlay_enable.isChecked())
+            viewer._anim_overlay_show_index = bool(self.chk_anim_overlay_show_index.isChecked())
+            pos_idx = int(self.combo_anim_overlay_pos.currentIndex())
+            viewer._anim_overlay_position = ("top-left" if pos_idx == 0 else ("top-right" if pos_idx == 1 else ("bottom-left" if pos_idx == 2 else "bottom-right")))
+            viewer._anim_overlay_opacity = float(self.spin_anim_overlay_opacity.value())
         except Exception:
             pass
         # 세션/최근 저장
