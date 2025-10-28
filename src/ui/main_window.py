@@ -349,6 +349,15 @@ class JusawiViewer(QMainWindow):
         self._overlay_pos_timer.setInterval(33)
         self._overlay_pos_timer.timeout.connect(self._position_fullscreen_overlays)
 
+        # 프리로드 유휴 타이머
+        self._idle_prefetch_timer = QTimer(self)
+        self._idle_prefetch_timer.setSingleShot(True)
+        self._idle_prefetch_timer.setInterval(600)  # 기본 600ms 무입력 시 유휴로 간주
+        try:
+            self._idle_prefetch_timer.timeout.connect(lambda: (not getattr(self, "_preload_only_when_idle", False)) or self._preload_neighbors())
+        except Exception:
+            pass
+
         # 설정 로드 및 최근/세션 복원
         self.load_settings()
         # YAML에서 고급 캐시 설정이 제공된 경우 이미지 서비스에 적용
@@ -358,6 +367,16 @@ class JusawiViewer(QMainWindow):
             if hasattr(self, "image_service") and self.image_service is not None:
                 try:
                     self.image_service.set_cache_limits(img_max, scaled_max)
+                except Exception:
+                    pass
+                # 캐시 자동 축소/정리 타이머 적용
+                try:
+                    if getattr(self, "_cache_gc_interval_s", 0) and int(self._cache_gc_interval_s) > 0:
+                        if not hasattr(self, "_cache_gc_timer") or self._cache_gc_timer is None:
+                            self._cache_gc_timer = QTimer(self)
+                            self._cache_gc_timer.setSingleShot(False)
+                            self._cache_gc_timer.timeout.connect(self._on_cache_gc_timer)
+                        self._cache_gc_timer.start(max(5, int(self._cache_gc_interval_s)) * 1000)
                 except Exception:
                     pass
         except Exception:
@@ -396,6 +415,28 @@ class JusawiViewer(QMainWindow):
 
     def _set_global_shortcuts_enabled(self, enabled: bool) -> None:
         set_global_shortcuts_enabled(self, enabled)
+
+    def _on_cache_gc_timer(self) -> None:
+        try:
+            # 저메모리 감지(Windows 메모리 여유 등은 복잡하므로 간단히 프로세스 RSS 기준 임계 적용 가능)
+            auto_pct = int(getattr(self, "_cache_auto_shrink_pct", 50))
+            auto_pct = max(10, min(90, auto_pct))
+            # 상한을 auto_pct%만큼 축소하여 일시적으로 비운 뒤 상한 복원
+            if hasattr(self.image_service, "_img_cache") and hasattr(self.image_service, "_scaled_cache"):
+                try:
+                    orig_img_max = int(self.image_service._img_cache._max_bytes)
+                    orig_scaled_max = int(self.image_service._scaled_cache._max_bytes)
+                    new_img_max = max(1, int(orig_img_max * (100 - auto_pct) / 100))
+                    new_scaled_max = max(1, int(orig_scaled_max * (100 - auto_pct) / 100))
+                    self.image_service._img_cache.shrink_to(new_img_max)
+                    self.image_service._scaled_cache.shrink_to(new_scaled_max)
+                    # 복원
+                    self.image_service._img_cache._max_bytes = orig_img_max
+                    self.image_service._scaled_cache._max_bytes = orig_scaled_max
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # ----- Undo/Redo 히스토리 -----
     def _capture_state(self):
@@ -699,41 +740,22 @@ class JusawiViewer(QMainWindow):
             pass
 
     def event(self, e):
-        if lifecycle.before_event(self, e):
-            return super().event(e)
         try:
+            from PyQt6.QtCore import QEvent  # type: ignore
             et = e.type()
-            from PyQt6.QtCore import QEvent  # type: ignore[import]
-            try:
-                from PyQt6.QtGui import QWheelEvent  # type: ignore[import]
-            except Exception:
-                QWheelEvent = None  # type: ignore
-            if et in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.Wheel, QEvent.Type.KeyPress):
-                # 전체화면에서의 제스처 기반 줌(휠+Ctrl/Alt)은 UI 자동 표시를 유발하지 않도록 예외 처리
-                should_auto_show = True
-                if et == QEvent.Type.Wheel and self.is_fullscreen:
-                    try:
-                        # QWheelEvent 인스턴스에서 수정자 확인
-                        if QWheelEvent is not None and isinstance(e, QWheelEvent):
-                            mods = e.modifiers()
-                            ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
-                            alt = bool(mods & Qt.KeyboardModifier.AltModifier)
-                            if ctrl or alt:
-                                should_auto_show = False
-                    except Exception:
-                        pass
-                if should_auto_show:
-                    self._on_user_activity()
-            # 트랙패드 두 손가락 좌우 스와이프 → 이전/다음 파일
-            if et == QEvent.Type.Wheel:
+            # 입력 이벤트가 발생하면 유휴 타이머를 재시작하여 일정 시간 후 프리로드
+            if et in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress, QEvent.Type.Wheel):
                 try:
-                    if self._maybe_gesture_nav(e):
-                        return True
+                    if getattr(self, "_preload_only_when_idle", False):
+                        self._idle_prefetch_timer.start()
                 except Exception:
                     pass
         except Exception:
             pass
-        return super().event(e)
+        try:
+            return super().event(e)
+        except Exception:
+            return False
 
     def keyPressEvent(self, event):
         try:
@@ -804,6 +826,24 @@ class JusawiViewer(QMainWindow):
     # ----- 사용자 요청 단축키 핸들러 -----
     def reload_current_image(self):
         file_cmd.reload_current_image(self)
+
+    def clear_caches(self) -> None:
+        try:
+            if hasattr(self, "image_service") and self.image_service is not None:
+                try:
+                    self.image_service.clear_all_caches()
+                except Exception:
+                    pass
+            try:
+                self._clear_filmstrip_cache()
+            except Exception:
+                pass
+            try:
+                self.statusBar().showMessage("캐시를 비웠습니다.", 2000)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     # open_recent_list 단축키 제거됨
 
@@ -992,11 +1032,43 @@ class JusawiViewer(QMainWindow):
             pass
         util_handle_escape(self)
 
+    def start_slideshow(self, interval_ms: int = 2000):
+        """슬라이드쇼 시작(간단한 placeholder). interval_ms 간격으로 다음 이미지로 이동."""
+        try:
+            self.is_slideshow_active = True
+            from PyQt6.QtCore import QTimer  # type: ignore
+            if not hasattr(self, "_slideshow_timer") or self._slideshow_timer is None:
+                self._slideshow_timer = QTimer(self)
+                self._slideshow_timer.timeout.connect(lambda: getattr(self._nav, "show_next_image", lambda: None)())
+            self._slideshow_timer.start(max(500, int(interval_ms)))
+            # 슬라이드쇼 시작 예열 N장
+            try:
+                n = int(getattr(self, "_slideshow_prefetch_count", 0))
+            except Exception:
+                n = 0
+            if n and n > 0:
+                idx = int(getattr(self, "current_image_index", -1))
+                files = getattr(self, "image_files_in_dir", []) or []
+                paths: list[str] = []
+                for off in range(1, n + 1):
+                    j = idx + off
+                    if 0 <= j < len(files):
+                        paths.append(files[j])
+                if paths:
+                    prio = int(getattr(self, "_preload_priority", -1))
+                    self.image_service.preload(paths, priority=prio)
+        except Exception:
+            pass
+
     def stop_slideshow(self):
         """슬라이드쇼 종료 (향후 구현을 위한 placeholder)"""
         self.is_slideshow_active = False
         # 슬라이드쇼 타이머가 있다면 여기서 정지
-        pass
+        try:
+            if hasattr(self, "_slideshow_timer") and self._slideshow_timer is not None:
+                self._slideshow_timer.stop()
+        except Exception:
+            pass
 
     def delete_current_image(self):
         file_cmd.delete_current_image(self)
@@ -1121,7 +1193,27 @@ class JusawiViewer(QMainWindow):
         return info_panel.update_info_panel_sizes(self)
 
     def scan_directory(self, dir_path):
-        return dir_scan_ext.scan_directory(self, dir_path)
+        res = dir_scan_ext.scan_directory(self, dir_path)
+        # 디렉터리 진입 예열
+        try:
+            n = int(getattr(self, "_prefetch_on_dir_enter", 0))
+        except Exception:
+            n = 0
+        if n and n > 0:
+            try:
+                idx = int(getattr(self, "current_image_index", -1))
+                files = getattr(self, "image_files_in_dir", []) or []
+                paths: list[str] = []
+                for off in range(1, n + 1):
+                    j = idx + off
+                    if 0 <= j < len(files):
+                        paths.append(files[j])
+                if paths:
+                    prio = int(getattr(self, "_preload_priority", -1))
+                    self.image_service.preload(paths, priority=prio)
+            except Exception:
+                pass
+        return res
 
     def _rescan_current_dir(self):
         return dir_scan_ext.rescan_current_dir(self)

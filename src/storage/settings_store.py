@@ -294,6 +294,54 @@ def load_settings(viewer) -> None:
             viewer._enable_map_prefetch = bool(viewer.settings.value("prefetch/map_enabled", True, bool))
         except Exception:
             viewer._enable_map_prefetch = True
+        try:
+            viewer._preload_direction = str(viewer.settings.value("prefetch/preload_direction", "both", str))
+            if viewer._preload_direction not in ("both", "forward", "backward"):
+                viewer._preload_direction = "both"
+        except Exception:
+            viewer._preload_direction = "both"
+        try:
+            viewer._preload_priority = int(viewer.settings.value("prefetch/preload_priority", -1))
+        except Exception:
+            viewer._preload_priority = -1
+        try:
+            viewer._preload_max_concurrency = int(viewer.settings.value("prefetch/preload_max_concurrency", 0))
+        except Exception:
+            viewer._preload_max_concurrency = 0
+        try:
+            viewer._preload_retry_count = int(viewer.settings.value("prefetch/preload_retry_count", 0))
+        except Exception:
+            viewer._preload_retry_count = 0
+        try:
+            viewer._preload_retry_delay_ms = int(viewer.settings.value("prefetch/preload_retry_delay_ms", 0))
+        except Exception:
+            viewer._preload_retry_delay_ms = 0
+        try:
+            viewer._preload_only_when_idle = bool(viewer.settings.value("prefetch/only_when_idle", False, bool))
+        except Exception:
+            viewer._preload_only_when_idle = False
+        try:
+            viewer._prefetch_on_dir_enter = int(viewer.settings.value("prefetch/prefetch_on_dir_enter", 0))
+        except Exception:
+            viewer._prefetch_on_dir_enter = 0
+        try:
+            viewer._slideshow_prefetch_count = int(viewer.settings.value("prefetch/slideshow_prefetch_count", 0))
+        except Exception:
+            viewer._slideshow_prefetch_count = 0
+        try:
+            viewer._preload_direction = str(viewer.settings.value("prefetch/preload_direction", "both", str))
+            if viewer._preload_direction not in ("both", "forward", "backward"):
+                viewer._preload_direction = "both"
+        except Exception:
+            viewer._preload_direction = "both"
+        try:
+            viewer._preload_priority = int(viewer.settings.value("prefetch/preload_priority", -1))
+        except Exception:
+            viewer._preload_priority = -1
+        try:
+            viewer._preload_max_concurrency = int(viewer.settings.value("prefetch/preload_max_concurrency", 0))
+        except Exception:
+            viewer._preload_max_concurrency = 0
         # 자동화
         try:
             viewer._auto_ai_on_open = bool(viewer.settings.value("ai/auto_on_open", False, bool))
@@ -401,6 +449,48 @@ def load_settings(viewer) -> None:
             viewer._preserve_visual_size_on_dpr_change = bool(viewer.settings.value("view/preserve_visual_size_on_dpr_change", False, bool))
         except Exception:
             pass
+        # 지능형 스케일 프리젠
+        try:
+            viewer._pregen_scales_enabled = bool(viewer.settings.value("view/pregen_scales_enabled", False, bool))
+        except Exception:
+            viewer._pregen_scales_enabled = False
+        try:
+            raw = str(viewer.settings.value("view/pregen_scales", "0.25,0.5,1.0,2.0", str))
+            arr: list[float] = []
+            for p in [t.strip() for t in raw.split(',') if t.strip()]:
+                try:
+                    arr.append(float(p))
+                except Exception:
+                    pass
+            viewer._pregen_scales = arr if arr else [0.25, 0.5, 1.0, 2.0]
+        except Exception:
+            viewer._pregen_scales = [0.25, 0.5, 1.0, 2.0]
+        # 고급 캐시 로드
+        try:
+            viewer._img_cache_max_bytes = int(viewer.settings.value("advanced/image_cache_max_bytes", 256*1024*1024))
+        except Exception:
+            viewer._img_cache_max_bytes = 256*1024*1024
+        try:
+            viewer._scaled_cache_max_bytes = int(viewer.settings.value("advanced/scaled_cache_max_bytes", 384*1024*1024))
+        except Exception:
+            viewer._scaled_cache_max_bytes = 384*1024*1024
+        try:
+            viewer._cache_auto_shrink_pct = int(viewer.settings.value("advanced/cache_auto_shrink_pct", 50))
+        except Exception:
+            viewer._cache_auto_shrink_pct = 50
+        try:
+            viewer._cache_gc_interval_s = int(viewer.settings.value("advanced/cache_gc_interval_s", 0))
+        except Exception:
+            viewer._cache_gc_interval_s = 0
+        # 썸네일 캐시 설정 로드
+        try:
+            viewer._thumb_cache_quality = int(viewer.settings.value("thumb_cache/quality", 85))
+        except Exception:
+            viewer._thumb_cache_quality = 85
+        try:
+            viewer._thumb_cache_dir = str(viewer.settings.value("thumb_cache/dir", "", str))
+        except Exception:
+            viewer._thumb_cache_dir = ""
         # YAML 구성 로드 제거(롤백)
     except Exception:
         viewer.recent_files = []
@@ -465,6 +555,13 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("view/double_click_action", str(getattr(viewer, "_double_click_action", 'toggle')))
         viewer.settings.setValue("view/middle_click_action", str(getattr(viewer, "_middle_click_action", 'none')))
         viewer.settings.setValue("view/preserve_visual_size_on_dpr_change", bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)))
+        # 지능형 스케일 프리젠 저장
+        viewer.settings.setValue("view/pregen_scales_enabled", bool(getattr(viewer, "_pregen_scales_enabled", False)))
+        try:
+            txt = ",".join([str(x) for x in (getattr(viewer, "_pregen_scales", [0.25,0.5,1.0,2.0]))])
+        except Exception:
+            txt = "0.25,0.5,1.0,2.0"
+        viewer.settings.setValue("view/pregen_scales", txt)
         # Drag & Drop / 목록 정책 저장
         viewer.settings.setValue("drop/allow_folder_drop", bool(getattr(viewer, "_drop_allow_folder", False)))
         viewer.settings.setValue("drop/use_parent_scan", bool(getattr(viewer, "_drop_use_parent_scan", True)))
@@ -475,6 +572,25 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("prefetch/thumbs_enabled", bool(getattr(viewer, "_enable_thumb_prefetch", True)))
         viewer.settings.setValue("prefetch/preload_radius", int(getattr(viewer, "_preload_radius", 2)))
         viewer.settings.setValue("prefetch/map_enabled", bool(getattr(viewer, "_enable_map_prefetch", True)))
+        viewer.settings.setValue("prefetch/preload_direction", str(getattr(viewer, "_preload_direction", "both")))
+        viewer.settings.setValue("prefetch/preload_priority", int(getattr(viewer, "_preload_priority", -1)))
+        viewer.settings.setValue("prefetch/preload_max_concurrency", int(getattr(viewer, "_preload_max_concurrency", 0)))
+        viewer.settings.setValue("prefetch/preload_retry_count", int(getattr(viewer, "_preload_retry_count", 0)))
+        viewer.settings.setValue("prefetch/preload_retry_delay_ms", int(getattr(viewer, "_preload_retry_delay_ms", 0)))
+        viewer.settings.setValue("prefetch/only_when_idle", bool(getattr(viewer, "_preload_only_when_idle", False)))
+        viewer.settings.setValue("prefetch/prefetch_on_dir_enter", int(getattr(viewer, "_prefetch_on_dir_enter", 0)))
+        viewer.settings.setValue("prefetch/slideshow_prefetch_count", int(getattr(viewer, "_slideshow_prefetch_count", 0)))
+        # 고급 캐시 상한 저장
+        viewer.settings.setValue("advanced/image_cache_max_bytes", int(getattr(viewer, "_img_cache_max_bytes", 256*1024*1024)))
+        viewer.settings.setValue("advanced/scaled_cache_max_bytes", int(getattr(viewer, "_scaled_cache_max_bytes", 384*1024*1024)))
+        viewer.settings.setValue("advanced/cache_auto_shrink_pct", int(getattr(viewer, "_cache_auto_shrink_pct", 50)))
+        viewer.settings.setValue("advanced/cache_gc_interval_s", int(getattr(viewer, "_cache_gc_interval_s", 0)))
+        # 썸네일 캐시 저장
+        viewer.settings.setValue("thumb_cache/quality", int(getattr(viewer, "_thumb_cache_quality", 85)))
+        viewer.settings.setValue("thumb_cache/dir", str(getattr(viewer, "_thumb_cache_dir", "")))
+        viewer.settings.setValue("prefetch/preload_direction", str(getattr(viewer, "_preload_direction", "both")))
+        viewer.settings.setValue("prefetch/preload_priority", int(getattr(viewer, "_preload_priority", -1)))
+        viewer.settings.setValue("prefetch/preload_max_concurrency", int(getattr(viewer, "_preload_max_concurrency", 0)))
         # 자동화 저장
         viewer.settings.setValue("ai/auto_on_open", bool(getattr(viewer, "_auto_ai_on_open", False)))
         viewer.settings.setValue("ai/auto_delay_ms", int(getattr(viewer, "_auto_ai_delay_ms", 0)))

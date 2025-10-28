@@ -321,7 +321,9 @@ def load_image(viewer: "JusawiViewer", file_path: str, source: str = 'other') ->
 
 
 def preload_neighbors(viewer: "JusawiViewer") -> None:
-    """현재 인덱스를 기준으로 다음/이전 이미지를 백그라운드로 프리로드."""
+    """현재 인덱스를 기준으로 다음/이전 이미지를 백그라운드로 프리로드.
+    방향/반경/우선순위는 뷰어 설정을 따른다.
+    """
     if not viewer.image_files_in_dir:
         return
     idx = viewer.current_image_index
@@ -330,16 +332,21 @@ def preload_neighbors(viewer: "JusawiViewer") -> None:
     paths: list[str] = []
     if not bool(getattr(viewer, "_enable_thumb_prefetch", True)):
         return
-    for off in range(1, getattr(viewer, "_preload_radius", 2) + 1):
-        n = idx + off
-        p = idx - off
-        if 0 <= n < len(viewer.image_files_in_dir):
-            paths.append(viewer.image_files_in_dir[n])
-        if 0 <= p < len(viewer.image_files_in_dir):
-            paths.append(viewer.image_files_in_dir[p])
+    direction = str(getattr(viewer, "_preload_direction", "both"))  # both|forward|backward
+    radius = int(getattr(viewer, "_preload_radius", 2))
+    for off in range(1, radius + 1):
+        if direction in ("both", "forward"):
+            n = idx + off
+            if 0 <= n < len(viewer.image_files_in_dir):
+                paths.append(viewer.image_files_in_dir[n])
+        if direction in ("both", "backward"):
+            p = idx - off
+            if 0 <= p < len(viewer.image_files_in_dir):
+                paths.append(viewer.image_files_in_dir[p])
     if paths:
         try:
-            viewer.image_service.preload(paths, priority=-1)
+            prio = int(getattr(viewer, "_preload_priority", -1))
+            viewer.image_service.preload(paths, priority=prio)
         except Exception:
             pass
 

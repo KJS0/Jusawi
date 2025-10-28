@@ -27,14 +27,9 @@ class SettingsDialog(QDialog):
 
 
         # ----- 일반 탭 -----
-        from PyQt6.QtWidgets import QScrollArea  # type: ignore[import]
         self.general_tab = QWidget(self)
-        self._general_scroll = QScrollArea(self)
-        self._general_scroll.setWidgetResizable(True)
-        self._general_container = QWidget(self)
-        self._general_scroll.setWidget(self._general_container)
-        self.tabs.addTab(self._general_scroll, "일반")
-        gen_layout = QVBoxLayout(self._general_container)
+        self.tabs.addTab(self.general_tab, "일반")
+        gen_layout = QVBoxLayout(self.general_tab)
         try:
             gen_layout.setContentsMargins(8, 8, 8, 8)
             gen_layout.setSpacing(8)
@@ -53,9 +48,6 @@ class SettingsDialog(QDialog):
         self.combo_startup_restore.addItems(["항상 복원", "묻기", "복원 안 함"])  # always/ask/never
         self.spin_recent_max = QSpinBox(self.general_tab); self.spin_recent_max.setRange(1, 100); self.spin_recent_max.setSuffix(" 개")
         self.chk_recent_auto_prune = QCheckBox("존재하지 않는 항목 자동 정리", self.general_tab)
-        from PyQt6.QtWidgets import QLineEdit  # type: ignore[import]
-        self.ed_recent_exclude = QLineEdit(self.general_tab)
-        self.ed_recent_exclude.setPlaceholderText("예: C:/Temp; \\server\\share; node_modules")
         form_recent = QFormLayout()
         form_recent.addRow("시작 시 세션 복원", self.combo_startup_restore)
         form_recent.addRow("최근 목록 최대 개수", self.spin_recent_max)
@@ -115,17 +107,6 @@ class SettingsDialog(QDialog):
         form_dnd.addRow("임계치", self.spin_drop_threshold)
         gen_layout.addLayout(form_dnd)
 
-        # 성능/프리페치
-        gen_layout.addWidget(QLabel("성능/프리페치", self.general_tab))
-        self.chk_prefetch_thumbs = QCheckBox("썸네일/이웃 이미지 프리로드", self.general_tab)
-        self.spin_preload_radius = QSpinBox(self.general_tab); self.spin_preload_radius.setRange(0, 20); self.spin_preload_radius.setSuffix(" 장")
-        self.chk_prefetch_map = QCheckBox("지도 캐시 프리페치", self.general_tab)
-        form_pf = QFormLayout()
-        form_pf.addRow("썸네일 프리페치", self.chk_prefetch_thumbs)
-        form_pf.addRow("이웃 프리로드 반경", self.spin_preload_radius)
-        form_pf.addRow("지도 프리페치", self.chk_prefetch_map)
-        gen_layout.addLayout(form_pf)
-
         # 자동화
         gen_layout.addWidget(QLabel("자동화", self.general_tab))
         self.chk_ai_auto = QCheckBox("사진 열기/드롭 후 AI 분석 자동 실행", self.general_tab)
@@ -144,6 +125,95 @@ class SettingsDialog(QDialog):
         tiff_row.addWidget(self.chk_tiff_first_page)
         tiff_row.addStretch(1)
         gen_layout.addLayout(tiff_row)
+
+        # ----- 성능/프리패치 탭 -----
+        self.perf_tab = QWidget(self)
+        self.tabs.addTab(self.perf_tab, "성능/프리패치")
+        perf_layout = QVBoxLayout(self.perf_tab)
+        try:
+            perf_layout.setContentsMargins(8, 8, 8, 8)
+            perf_layout.setSpacing(8)
+        except Exception:
+            pass
+
+        perf_layout.addWidget(QLabel("성능/프리페치", self.perf_tab))
+        self.chk_prefetch_thumbs = QCheckBox("썸네일/이웃 이미지 프리로드", self.perf_tab)
+        self.spin_preload_radius = QSpinBox(self.perf_tab); self.spin_preload_radius.setRange(0, 20); self.spin_preload_radius.setSuffix(" 장")
+        self.chk_prefetch_map = QCheckBox("지도 캐시 프리페치", self.perf_tab)
+        # 프리로드 방향/우선순위/동시 작업 수
+        self.combo_preload_direction = QComboBox(self.perf_tab)
+        self.combo_preload_direction.addItems(["양방향", "앞쪽", "뒤쪽"])  # both/forward/backward
+        self.spin_preload_priority = QSpinBox(self.perf_tab); self.spin_preload_priority.setRange(-10, 10); self.spin_preload_priority.setSuffix(" prio")
+        self.spin_preload_concurrency = QSpinBox(self.perf_tab); self.spin_preload_concurrency.setRange(0, 16); self.spin_preload_concurrency.setSuffix(" 개")
+        self.spin_preload_retry = QSpinBox(self.perf_tab); self.spin_preload_retry.setRange(0, 5); self.spin_preload_retry.setSuffix(" 회")
+        self.spin_preload_retry_delay = QSpinBox(self.perf_tab); self.spin_preload_retry_delay.setRange(0, 5000); self.spin_preload_retry_delay.setSuffix(" ms")
+        # 캐시 상한
+        self.spin_img_cache_mb = QSpinBox(self.perf_tab); self.spin_img_cache_mb.setRange(32, 4096); self.spin_img_cache_mb.setSuffix(" MB")
+        self.spin_scaled_cache_mb = QSpinBox(self.perf_tab); self.spin_scaled_cache_mb.setRange(32, 8192); self.spin_scaled_cache_mb.setSuffix(" MB")
+        self.spin_cache_auto_shrink_pct = QSpinBox(self.perf_tab); self.spin_cache_auto_shrink_pct.setRange(10, 90); self.spin_cache_auto_shrink_pct.setSuffix(" %")
+        self.spin_cache_gc_interval = QSpinBox(self.perf_tab); self.spin_cache_gc_interval.setRange(0, 600); self.spin_cache_gc_interval.setSuffix(" s")
+        form_pf = QFormLayout()
+        form_pf.addRow("썸네일 프리페치", self.chk_prefetch_thumbs)
+        form_pf.addRow("이웃 프리로드 반경", self.spin_preload_radius)
+        form_pf.addRow("지도 프리페치", self.chk_prefetch_map)
+        form_pf.addRow("프리로드 방향", self.combo_preload_direction)
+        form_pf.addRow("프리로드 우선순위", self.spin_preload_priority)
+        form_pf.addRow("프리로드 동시 작업 수", self.spin_preload_concurrency)
+        form_pf.addRow("프리로드 재시도 횟수", self.spin_preload_retry)
+        form_pf.addRow("프리로드 재시도 지연", self.spin_preload_retry_delay)
+        form_pf.addRow("원본 캐시 상한", self.spin_img_cache_mb)
+        form_pf.addRow("스케일 캐시 상한", self.spin_scaled_cache_mb)
+        form_pf.addRow("저메모리 시 축소 비율", self.spin_cache_auto_shrink_pct)
+        form_pf.addRow("캐시 정리 주기", self.spin_cache_gc_interval)
+        perf_layout.addLayout(form_pf)
+
+        # 썸네일 캐시 옵션
+        perf_layout.addWidget(QLabel("썸네일 캐시", self.perf_tab))
+        self.spin_thumb_quality = QSpinBox(self.perf_tab); self.spin_thumb_quality.setRange(50, 100); self.spin_thumb_quality.setSuffix(" %")
+        from PyQt6.QtWidgets import QLineEdit as _QLineEdit  # type: ignore[import]
+        self.ed_thumb_dir = _QLineEdit(self.perf_tab)
+        self.ed_thumb_dir.setPlaceholderText("기본 경로 사용 시 비워두세요")
+        self.btn_thumb_dir = QPushButton("변경…", self.perf_tab)
+        def _pick_thumb_dir():
+            try:
+                from PyQt6.QtWidgets import QFileDialog  # type: ignore[import]
+                d = QFileDialog.getExistingDirectory(self, "썸네일 캐시 폴더 선택", self.ed_thumb_dir.text() or os.path.expanduser("~"))
+                if d:
+                    self.ed_thumb_dir.setText(d)
+            except Exception:
+                pass
+        try:
+            self.btn_thumb_dir.clicked.connect(_pick_thumb_dir)
+        except Exception:
+            pass
+        row_thumb = QFormLayout()
+        row_thumb.addRow("품질", self.spin_thumb_quality)
+        from PyQt6.QtWidgets import QHBoxLayout as _HBox  # type: ignore[import]
+        _h = _HBox(); _h.addWidget(self.ed_thumb_dir, 1); _h.addWidget(self.btn_thumb_dir)
+        row_thumb.addRow("저장 위치", _h)
+        perf_layout.addLayout(row_thumb)
+
+        # 지능형 스케일 프리젠
+        perf_layout.addWidget(QLabel("지능형 스케일 프리젠", self.perf_tab))
+        self.chk_pregen_scales = QCheckBox("선호 배율 미리 생성", self.perf_tab)
+        from PyQt6.QtWidgets import QLineEdit as _QLineEdit2  # type: ignore[import]
+        self.ed_pregen_scales = _QLineEdit2(self.perf_tab)
+        self.ed_pregen_scales.setPlaceholderText("예: 0.25,0.5,1.0,2.0")
+        form_pregen = QFormLayout()
+        form_pregen.addRow("활성화", self.chk_pregen_scales)
+        form_pregen.addRow("배율 목록", self.ed_pregen_scales)
+        perf_layout.addLayout(form_pregen)
+
+        # 프리로드 시점 옵션
+        perf_layout.addWidget(QLabel("프리로드 시점", self.perf_tab))
+        self.chk_preload_idle_only = QCheckBox("유휴 시간에만 프리로드 실행", self.perf_tab)
+        self.spin_prefetch_on_dir_enter = QSpinBox(self.perf_tab); self.spin_prefetch_on_dir_enter.setRange(0, 50); self.spin_prefetch_on_dir_enter.setSuffix(" 장")
+        self.spin_slideshow_prefetch = QSpinBox(self.perf_tab); self.spin_slideshow_prefetch.setRange(0, 100); self.spin_slideshow_prefetch.setSuffix(" 장")
+        form_pt = QFormLayout()
+        form_pt.addRow("유휴 시 프리로드", self.chk_preload_idle_only)
+        form_pt.addRow("디렉터리 진입 예열", self.spin_prefetch_on_dir_enter)
+        form_pt.addRow("슬라이드쇼 시작 예열", self.spin_slideshow_prefetch)
+        perf_layout.addLayout(form_pt)
 
         # 단축키 탭 제거
         self._keys_ready = False
@@ -525,6 +595,69 @@ class SettingsDialog(QDialog):
             self.chk_prefetch_map.setChecked(bool(getattr(viewer, "_enable_map_prefetch", True)))
         except Exception:
             self.chk_prefetch_map.setChecked(True)
+        # 프리로드 방향/우선순위/동시 수/캐시 상한 로드
+        try:
+            dir_map = {"both":0, "forward":1, "backward":2}
+            self.combo_preload_direction.setCurrentIndex(dir_map.get(str(getattr(viewer, "_preload_direction", "both")), 0))
+        except Exception:
+            self.combo_preload_direction.setCurrentIndex(0)
+        try:
+            self.spin_preload_priority.setValue(int(getattr(viewer, "_preload_priority", -1)))
+        except Exception:
+            self.spin_preload_priority.setValue(-1)
+        try:
+            self.spin_preload_concurrency.setValue(int(getattr(viewer, "_preload_max_concurrency", 0)))
+        except Exception:
+            self.spin_preload_concurrency.setValue(0)
+        try:
+            self.spin_preload_retry.setValue(int(getattr(viewer, "_preload_retry_count", 0)))
+        except Exception:
+            self.spin_preload_retry.setValue(0)
+        try:
+            self.spin_preload_retry_delay.setValue(int(getattr(viewer, "_preload_retry_delay_ms", 0)))
+        except Exception:
+            self.spin_preload_retry_delay.setValue(0)
+        try:
+            mb = int(max(1, int(getattr(viewer, "_img_cache_max_bytes", 256*1024*1024)) // (1024*1024)))
+            self.spin_img_cache_mb.setValue(mb)
+        except Exception:
+            self.spin_img_cache_mb.setValue(256)
+        try:
+            mb2 = int(max(1, int(getattr(viewer, "_scaled_cache_max_bytes", 384*1024*1024)) // (1024*1024)))
+            self.spin_scaled_cache_mb.setValue(mb2)
+        except Exception:
+            self.spin_scaled_cache_mb.setValue(384)
+        try:
+            self.spin_cache_auto_shrink_pct.setValue(int(getattr(viewer, "_cache_auto_shrink_pct", 50)))
+        except Exception:
+            self.spin_cache_auto_shrink_pct.setValue(50)
+        try:
+            self.spin_cache_gc_interval.setValue(int(getattr(viewer, "_cache_gc_interval_s", 0)))
+        except Exception:
+            self.spin_cache_gc_interval.setValue(0)
+        # 썸네일 캐시
+        try:
+            self.spin_thumb_quality.setValue(int(getattr(viewer, "_thumb_cache_quality", 85)))
+        except Exception:
+            self.spin_thumb_quality.setValue(85)
+        try:
+            self.ed_thumb_dir.setText(str(getattr(viewer, "_thumb_cache_dir", "")) or "")
+        except Exception:
+            self.ed_thumb_dir.setText("")
+        # 지능형 스케일 프리젠 로드
+        try:
+            self.chk_pregen_scales.setChecked(bool(getattr(viewer, "_pregen_scales_enabled", False)))
+        except Exception:
+            self.chk_pregen_scales.setChecked(False)
+        try:
+            arr = getattr(viewer, "_pregen_scales", [0.25, 0.5, 1.0, 2.0])
+            if isinstance(arr, (list, tuple)):
+                txt = ",".join([str(x) for x in arr])
+            else:
+                txt = "0.25,0.5,1.0,2.0"
+            self.ed_pregen_scales.setText(txt)
+        except Exception:
+            self.ed_pregen_scales.setText("0.25,0.5,1.0,2.0")
         # 자동화 로드
         try:
             self.chk_ai_auto.setChecked(bool(getattr(viewer, "_auto_ai_on_open", False)))
@@ -735,7 +868,81 @@ class SettingsDialog(QDialog):
             viewer._enable_map_prefetch = bool(self.chk_prefetch_map.isChecked())
         except Exception:
             pass
+        # 프리로드/캐시 정책 적용
+        try:
+            idx = int(self.combo_preload_direction.currentIndex())
+            viewer._preload_direction = ("both" if idx == 0 else ("forward" if idx == 1 else "backward"))
+        except Exception:
+            pass
+        try:
+            viewer._preload_priority = int(self.spin_preload_priority.value())
+        except Exception:
+            pass
+        try:
+            viewer._preload_max_concurrency = int(self.spin_preload_concurrency.value())
+        except Exception:
+            pass
+        try:
+            viewer._preload_retry_count = int(self.spin_preload_retry.value())
+        except Exception:
+            pass
+        try:
+            viewer._preload_retry_delay_ms = int(self.spin_preload_retry_delay.value())
+        except Exception:
+            pass
+        try:
+            viewer._preload_only_when_idle = bool(self.chk_preload_idle_only.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._prefetch_on_dir_enter = int(self.spin_prefetch_on_dir_enter.value())
+        except Exception:
+            pass
+        try:
+            viewer._slideshow_prefetch_count = int(self.spin_slideshow_prefetch.value())
+        except Exception:
+            pass
+        try:
+            viewer._img_cache_max_bytes = int(self.spin_img_cache_mb.value()) * 1024 * 1024
+            viewer._scaled_cache_max_bytes = int(self.spin_scaled_cache_mb.value()) * 1024 * 1024
+            if hasattr(viewer, "image_service") and viewer.image_service is not None:
+                viewer.image_service.set_cache_limits(viewer._img_cache_max_bytes, viewer._scaled_cache_max_bytes)
+        except Exception:
+            pass
+        try:
+            viewer._cache_auto_shrink_pct = int(self.spin_cache_auto_shrink_pct.value())
+            viewer._cache_gc_interval_s = int(self.spin_cache_gc_interval.value())
+        except Exception:
+            pass
+        try:
+            viewer._thumb_cache_quality = int(self.spin_thumb_quality.value())
+            viewer._thumb_cache_dir = str(self.ed_thumb_dir.text()).strip()
+            # 필름스트립이 생성되었다면 즉시 적용
+            if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and getattr(viewer.filmstrip, '_cache', None) is not None:
+                try:
+                    viewer.filmstrip._cache.quality = int(viewer._thumb_cache_quality)
+                    if viewer._thumb_cache_dir:
+                        viewer.filmstrip._cache.root = viewer._thumb_cache_dir
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # 자동화 적용
+        # 지능형 스케일 프리젠 적용
+        try:
+            viewer._pregen_scales_enabled = bool(self.chk_pregen_scales.isChecked())
+            raw = str(self.ed_pregen_scales.text()).strip()
+            arr = []
+            for p in [t.strip() for t in raw.split(',') if t.strip()]:
+                try:
+                    arr.append(float(p))
+                except Exception:
+                    pass
+            if not arr:
+                arr = [0.25, 0.5, 1.0, 2.0]
+            viewer._pregen_scales = arr
+        except Exception:
+            pass
         try:
             viewer._auto_ai_on_open = bool(self.chk_ai_auto.isChecked())
         except Exception:

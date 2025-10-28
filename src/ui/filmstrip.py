@@ -55,8 +55,8 @@ class FilmItem:
 
 
 class ThumbCache:
-    def __init__(self, quality: int = 85):
-        self.root = _cache_root()
+    def __init__(self, quality: int = 85, root_dir: str | None = None):
+        self.root = root_dir or _cache_root()
         self.quality = int(quality)
         self._mem: Dict[str, QPixmap] = {}
         self._lock = threading.Lock()
@@ -356,7 +356,16 @@ class FilmstripView(QListView):
         super().__init__(parent)
         # 기본: 최대 썸네일 단계 사용 (가장 크게 보이도록)
         self._size_idx = len(THUMB_STEPS) - 1
-        self._cache = ThumbCache(quality=85)
+        # 품질/경로는 부모 뷰어 설정을 반영
+        try:
+            parent_q = int(getattr(parent, "_thumb_cache_quality", 85)) if parent is not None else 85
+        except Exception:
+            parent_q = 85
+        try:
+            parent_root = str(getattr(parent, "_thumb_cache_dir", "")) if parent is not None else ""
+        except Exception:
+            parent_root = ""
+        self._cache = ThumbCache(quality=parent_q, root_dir=(parent_root or None))
         self._pool = QThreadPool.globalInstance()
         self._model = FilmstripModel(self._cache, self._pool, self._target_size, self._current_dpr)
         self._delegate = FilmstripDelegate(self._target_size, self)

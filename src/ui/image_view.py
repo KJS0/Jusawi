@@ -104,6 +104,23 @@ class ImageView(QGraphicsView):
             self._emit_cursor_pos_at_viewport_point(QPointF(vp_point))
         # 새 픽스맵 설정 후 오버레이 갱신
         self.viewport().update()
+        # 지능형 스케일 프리젠 트리거
+        try:
+            owner = getattr(self, 'window', lambda: None)()
+            if owner and hasattr(owner, 'image_service') and getattr(owner, 'current_image_path', None) and getattr(owner, '_pregen_scales_enabled', False):
+                vw = int(self.viewport().width())
+                vh = int(self.viewport().height())
+                try:
+                    dpr = float(self.viewport().devicePixelRatioF())
+                except Exception:
+                    dpr = 1.0
+                scales = list(getattr(owner, '_pregen_scales', [0.25, 0.5, 1.0, 2.0]))
+                try:
+                    owner.image_service.pregen_preferred_scales(owner.current_image_path, vw, vh, dpr, scales, view_mode='fit')
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def originalPixmap(self) -> QPixmap | None:
         return self._original_pixmap

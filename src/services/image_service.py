@@ -133,6 +133,10 @@ class ImageService(QObject):
         # 프리로드용 스레드풀 및 세대 토큰
         self._pool = QThreadPool.globalInstance()
         self._preload_generation = 0
+        # 프리로드 정책
+        self._preload_max_concurrency = 0
+        self._preload_retry_count = 0
+        self._preload_retry_delay_ms = 0
         # 애니메이션 정보 캐시: path -> frame_count(>1이면 애니메이션), -1 미상/계산 실패
         self._anim_frame_count: dict[str, int] = {}
         # 저장 위임 서비스
@@ -402,6 +406,28 @@ class ImageService(QObject):
         except Exception:
             return None
 
+    # 지능형 스케일 프리젠: 선호 배율 세트를 미리 생성하여 스크롤/줌 지연 감소
+    def pregen_preferred_scales(self, path: str, base_viewport_w: int, base_viewport_h: int, dpr: float,
+                                preferred_scales: list[float], view_mode: str = "fit") -> None:
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            for s in preferred_scales or []:
+                try:
+                    scale = float(s)
+                except Exception:
+                    continue
+                if scale <= 0:
+                    continue
+                w = max(1, int(round(base_viewport_w * scale)))
+                h = max(1, int(round(base_viewport_h * scale)))
+                try:
+                    _ = self.get_scaled_for_viewport(path, w, h, view_mode=view_mode, dpr=dpr, headroom=1.0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def load_async(self, path: str) -> None:
         # 이전 작업 취소/정리
         if self._thread:
@@ -626,13 +652,24 @@ class ImageService(QObject):
         if not unique:
             return
 
-        for p in unique:
-            task = _PreloadTask(path=p, generation=generation, done=self._on_preload_done)
-            # 낮은 우선순위 힌트를 주기 위해 start() 대신 start with priority 사용 (Qt는 힌트로 취급)
+        # 동시 실행 상한 적용: 설정 값이 있으면 슬라이스 제한
+        try:
+            max_tasks = int(getattr(self, "_preload_max_concurrency", 0))
+        except Exception:
+            max_tasks = 0
+        queue = unique[:max_tasks] if isinstance(max_tasks, int) and max_tasks > 0 else unique
+        for p in queue:
+            task = _PreloadTask(
+                path=p,
+                generation=generation,
+                done=self._on_preload_done,
+                retry_count=int(getattr(self, "_preload_retry_count", 0)),
+                retry_delay_ms=int(getattr(self, "_preload_retry_delay_ms", 0)),
+            )
+            # 우선순위 힌트 사용
             try:
                 self._pool.start(task, priority)
             except Exception:
-                # 예외는 무시 (풀 포화 등)
                 pass
 
     def _on_preload_done(self, path: str, img: QImage, success: bool, error: str, generation: int) -> None:
@@ -837,22 +874,44 @@ class _QImageCache:
             except Exception:
                 pass
 
+    def shrink_to(self, max_bytes: int) -> None:
+        try:
+            self._max_bytes = max(1, int(max_bytes))
+            self._evict_if_needed()
+        except Exception:
+            pass
+
 
 class _PreloadTask(QRunnable):
     """경량 프리로드 작업: QImage를 디코드해 콜백으로 전달."""
 
-    def __init__(self, path: str, generation: int, done: Callable[[str, QImage, bool, str, int], None]):
+    def __init__(self, path: str, generation: int, done: Callable[[str, QImage, bool, str, int], None], retry_count: int = 0, retry_delay_ms: int = 0):
         super().__init__()
         self._path = path
         self._generation = generation
         self._done = done
+        self._retry_count = max(0, int(retry_count))
+        self._retry_delay_ms = max(0, int(retry_delay_ms))
 
     def run(self) -> None:
         try:
-            img, ok, err = _read_qimage_with_exif_auto_transform(self._path)
-            if not ok:
-                self._done(self._path, QImage(), False, err, self._generation)
-                return
-            self._done(self._path, img, True, "", self._generation)
+            attempts = 0
+            last_err = ""
+            while True:
+                img, ok, err = _read_qimage_with_exif_auto_transform(self._path)
+                if ok and img and not img.isNull():
+                    self._done(self._path, img, True, "", self._generation)
+                    return
+                last_err = err or ""
+                if attempts >= self._retry_count:
+                    break
+                attempts += 1
+                if self._retry_delay_ms > 0:
+                    try:
+                        import time
+                        time.sleep(self._retry_delay_ms / 1000.0)
+                    except Exception:
+                        pass
+            self._done(self._path, QImage(), False, last_err or "프리로드 실패", self._generation)
         except Exception as e:
             self._done(self._path, QImage(), False, str(e), self._generation)

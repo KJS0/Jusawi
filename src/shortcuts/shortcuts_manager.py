@@ -31,6 +31,9 @@ COMMANDS: List[Command] = [
     Command("reopen_last_closed", "마지막 닫은 이미지 다시 열기", "직전에 닫은 이미지를 다시 엽니다", "파일", "reopen_last_closed_image", ["Ctrl+Shift+T"]),
     Command("clear_recent", "최근 목록 비우기", "최근 파일/폴더 목록을 지웁니다", "파일", "clear_recent", ["Ctrl+Alt+Shift+R"]),
 
+    # 캐시 비우기
+    Command("clear_caches", "캐시 비우기", "이미지/스케일/썸네일 캐시 삭제", "파일", "clear_caches", ["Ctrl+Shift+Delete"]),
+
     Command("show_prev_image", "이전 이미지", "이전 파일로 이동", "탐색", "show_prev_image", ["Left", "PageUp"]),
     # Space는 애니메이션 재생/일시정지용으로 사용하므로 기본 매핑에서 제외
     Command("show_next_image", "다음 이미지", "다음 파일로 이동", "탐색", "show_next_image", ["Right", "PageDown"]),
