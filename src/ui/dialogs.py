@@ -136,7 +136,7 @@ def open_batch_ai_dialog(viewer: "JusawiViewer") -> None:
             pass
 
 
-def open_natural_search_dialog(viewer: "JusawiViewer") -> None:
+def open_natural_search_dialog(viewer: "JusawiViewer", initial_query: str | None = None) -> None:
     files = getattr(viewer, "image_files_in_dir", []) or []
     if not files:
         try:
@@ -159,9 +159,24 @@ def open_natural_search_dialog(viewer: "JusawiViewer") -> None:
         pass
     try:
         from .natural_search_dialog import NaturalSearchDialog
-        d = NaturalSearchDialog(viewer, files=files)
+        d = NaturalSearchDialog(viewer, files=files, initial_query=initial_query)
+        # 다크 테마 일관 적용을 위해 뷰어 테마러에 참조 전달
+        try:
+            viewer.natural_search_dialog = d
+            from .theme import apply_ui_theme_and_spacing
+            apply_ui_theme_and_spacing(viewer)
+        except Exception:
+            pass
         d.resize(800, 600)
-        d.exec()
+        try:
+            d.setModal(False)
+        except Exception:
+            pass
+        try:
+            d.finished.connect(lambda *_: viewer._set_global_shortcuts_enabled(True))
+        except Exception:
+            pass
+        d.show()
     except Exception as e:
         try:
             from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
@@ -169,9 +184,6 @@ def open_natural_search_dialog(viewer: "JusawiViewer") -> None:
         except Exception:
             pass
     finally:
-        try:
-            viewer._set_global_shortcuts_enabled(True)
-        except Exception:
-            pass
+        pass
 
 

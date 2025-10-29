@@ -271,7 +271,33 @@ def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
             "search_tag_weight": int(getattr(viewer, "_search_tag_weight", 2)),
             "bg_index_max": int(getattr(viewer, "_bg_index_max", 200)),
             "privacy_hide_location": bool(getattr(viewer, "_privacy_hide_location", False)),
-            "offline_mode": bool(getattr(viewer, "_offline_mode", False)),
+            "offline_mode": False,
+            # 자연어 검색(정렬/필터/표시/백그라운드)
+            "search_sort_order": str(getattr(viewer, "_search_sort_order", "similarity")),
+            "search_filter": {
+                "min_rating": int(getattr(viewer, "_search_filter_min_rating", 0)),
+                "flag_mode": str(getattr(viewer, "_search_filter_flag_mode", "any")),
+                "keywords": str(getattr(viewer, "_search_filter_keywords", "")),
+                "date_from": str(getattr(viewer, "_search_filter_date_from", "")),
+                "date_to": str(getattr(viewer, "_search_filter_date_to", "")),
+            },
+            "search_result": {
+                "thumb_size": int(getattr(viewer, "_search_result_thumb_size", 192)),
+                "view_mode": str(getattr(viewer, "_search_result_view_mode", "grid")),
+                "show_score": bool(getattr(viewer, "_search_show_score", True)),
+                "show_in_filmstrip": bool(getattr(viewer, "_search_show_in_filmstrip", False)),
+            },
+            "search_bg_prep_enabled": bool(getattr(viewer, "_search_bg_prep_enabled", False)),
+            "search_top_k": int(getattr(viewer, "_search_top_k", 80)),
+            "verify_model": str(getattr(viewer, "_verify_model", "gpt-5-nano")),
+            # 임베딩/검증 고급 옵션
+            "use_embedding": bool(getattr(viewer, "_search_use_embedding", True)),
+            "verify_strict_only": bool(getattr(viewer, "_search_verify_strict_only", True)),
+            "verify_max_candidates": int(getattr(viewer, "_search_verify_max_candidates", 200)),
+            "verify_workers": int(getattr(viewer, "_search_verify_workers", 16)),
+            "blend_alpha": float(getattr(viewer, "_search_blend_alpha", 0.7)),
+            "embed_batch_size": int(getattr(viewer, "_embed_batch_size", 64)),
+            "embed_model": str(getattr(viewer, "_embed_model", "text-embedding-3-small")),
         }
         # map/info
         cfg["map"] = {
@@ -411,6 +437,8 @@ def _apply_yaml_settings(viewer, cfg: Dict[str, Any]) -> None:
                 viewer._ai_retry_delay_ms = int(ai.get("retry_delay_ms"))
             if isinstance(ai.get("openai_api_key"), str):
                 viewer._ai_openai_api_key = str(ai.get("openai_api_key"))
+            if isinstance(ai.get("verify_model"), str):
+                viewer._verify_model = str(ai.get("verify_model"))
             # 확장 로드
             try:
                 viewer._ai_conf_threshold_pct = int(ai.get("conf_threshold_pct", 80))
@@ -457,7 +485,51 @@ def _apply_yaml_settings(viewer, cfg: Dict[str, Any]) -> None:
             except Exception:
                 pass
             try:
-                viewer._offline_mode = bool(ai.get("offline_mode", False))
+                viewer._offline_mode = False
+            except Exception:
+                pass
+            # 자연어 검색(정렬/필터/표시/백그라운드)
+            try:
+                so = ai.get("search_sort_order", "similarity")
+                if isinstance(so, str):
+                    viewer._search_sort_order = str(so)
+            except Exception:
+                pass
+            try:
+                f = ai.get("search_filter", {}) or {}
+                if isinstance(f, dict):
+                    if isinstance(f.get("min_rating"), int):
+                        viewer._search_filter_min_rating = int(f.get("min_rating", 0))
+                    if isinstance(f.get("flag_mode"), str):
+                        viewer._search_filter_flag_mode = str(f.get("flag_mode", "any"))
+                    if isinstance(f.get("keywords"), str):
+                        viewer._search_filter_keywords = str(f.get("keywords", ""))
+                    if isinstance(f.get("date_from"), str):
+                        viewer._search_filter_date_from = str(f.get("date_from", ""))
+                    if isinstance(f.get("date_to"), str):
+                        viewer._search_filter_date_to = str(f.get("date_to", ""))
+            except Exception:
+                pass
+            try:
+                r = ai.get("search_result", {}) or {}
+                if isinstance(r, dict):
+                    if isinstance(r.get("thumb_size"), int):
+                        viewer._search_result_thumb_size = int(r.get("thumb_size", 192))
+                    if isinstance(r.get("view_mode"), str):
+                        viewer._search_result_view_mode = str(r.get("view_mode", "grid"))
+                    if isinstance(r.get("show_score"), bool):
+                        viewer._search_show_score = bool(r.get("show_score", True))
+                    if isinstance(r.get("show_in_filmstrip"), bool):
+                        viewer._search_show_in_filmstrip = bool(r.get("show_in_filmstrip", False))
+            except Exception:
+                pass
+            try:
+                viewer._search_bg_prep_enabled = bool(ai.get("search_bg_prep_enabled", False))
+            except Exception:
+                pass
+            # 검색 상위 K (top_k)
+            try:
+                viewer._search_top_k = int(ai.get("search_top_k", 80))
             except Exception:
                 pass
             # HTTP 타임아웃: AIConfig가 있는 경우에만 설정 반영(없으면 무시)
@@ -911,6 +983,80 @@ def load_settings(viewer) -> None:
             viewer._search_verify_topn_default = int(viewer.settings.value("ai/search_verify_topn_default", 20))
         except Exception:
             viewer._search_verify_topn_default = 20
+        # 자연어 검색 정렬/필터/표시/백그라운드
+        try:
+            viewer._search_sort_order = str(viewer.settings.value("ai/search_sort_order", "similarity", str))
+        except Exception:
+            viewer._search_sort_order = "similarity"
+        try:
+            viewer._search_filter_min_rating = int(viewer.settings.value("ai/search_filter/min_rating", 0))
+        except Exception:
+            viewer._search_filter_min_rating = 0
+        try:
+            viewer._search_filter_flag_mode = str(viewer.settings.value("ai/search_filter/flag_mode", "any", str))
+        except Exception:
+            viewer._search_filter_flag_mode = "any"
+        try:
+            viewer._search_filter_keywords = str(viewer.settings.value("ai/search_filter/keywords", "", str))
+        except Exception:
+            viewer._search_filter_keywords = ""
+        try:
+            viewer._search_filter_date_from = str(viewer.settings.value("ai/search_filter/date_from", "", str))
+        except Exception:
+            viewer._search_filter_date_from = ""
+        try:
+            viewer._search_filter_date_to = str(viewer.settings.value("ai/search_filter/date_to", "", str))
+        except Exception:
+            viewer._search_filter_date_to = ""
+        try:
+            viewer._search_result_thumb_size = int(viewer.settings.value("ai/search_result/thumb_size", 192))
+        except Exception:
+            viewer._search_result_thumb_size = 192
+        try:
+            viewer._search_result_view_mode = str(viewer.settings.value("ai/search_result/view_mode", "grid", str))
+        except Exception:
+            viewer._search_result_view_mode = "grid"
+        try:
+            viewer._search_show_score = bool(viewer.settings.value("ai/search_result/show_score", True, bool))
+        except Exception:
+            viewer._search_show_score = True
+        try:
+            viewer._search_show_in_filmstrip = bool(viewer.settings.value("ai/search_result/show_in_filmstrip", False, bool))
+        except Exception:
+            viewer._search_show_in_filmstrip = False
+        try:
+            viewer._search_bg_prep_enabled = bool(viewer.settings.value("ai/search/bg_prep_enabled", False, bool))
+        except Exception:
+            viewer._search_bg_prep_enabled = False
+        # 임베딩/검증 고급 옵션
+        try:
+            viewer._search_use_embedding = bool(viewer.settings.value("ai/search/use_embedding", True, bool))
+        except Exception:
+            viewer._search_use_embedding = True
+        try:
+            viewer._search_verify_strict_only = bool(viewer.settings.value("ai/search/verify_strict_only", True, bool))
+        except Exception:
+            viewer._search_verify_strict_only = True
+        try:
+            viewer._search_verify_max_candidates = int(viewer.settings.value("ai/search/verify_max_candidates", 200))
+        except Exception:
+            viewer._search_verify_max_candidates = 200
+        try:
+            viewer._search_verify_workers = int(viewer.settings.value("ai/search/verify_workers", 16))
+        except Exception:
+            viewer._search_verify_workers = 16
+        try:
+            viewer._search_blend_alpha = float(viewer.settings.value("ai/search/blend_alpha", 0.7))
+        except Exception:
+            viewer._search_blend_alpha = 0.7
+        try:
+            viewer._embed_batch_size = int(viewer.settings.value("ai/embed/batch_size", 64))
+        except Exception:
+            viewer._embed_batch_size = 64
+        try:
+            viewer._embed_model = str(viewer.settings.value("ai/embed/model", "text-embedding-3-small", str))
+        except Exception:
+            viewer._embed_model = "text-embedding-3-small"
         try:
             viewer._search_tag_weight = int(viewer.settings.value("ai/search_tag_weight", 2))
         except Exception:
@@ -924,7 +1070,7 @@ def load_settings(viewer) -> None:
         except Exception:
             viewer._privacy_hide_location = False
         try:
-            viewer._offline_mode = bool(viewer.settings.value("ai/offline_mode", False, bool))
+            viewer._offline_mode = False
         except Exception:
             viewer._offline_mode = False
         # Navigation/Filmstrip/Zoom 정책 추가
@@ -1293,18 +1439,7 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("info/show_gps", bool(getattr(viewer, "_info_show_gps", True)))
         viewer.settings.setValue("info/max_lines", int(getattr(viewer, "_info_max_lines", 50)))
         viewer.settings.setValue("info/shutter_unit", str(getattr(viewer, "_info_shutter_unit", "auto")))
-        # 즉시 환경변수 반영(프로세스 범위)
-        try:
-            if bool(getattr(viewer, "_offline_mode", False)):
-                os.environ["OFFLINE_MODE"] = "1"
-            else:
-                os.environ.pop("OFFLINE_MODE", None)
-        except Exception:
-            pass
-        try:
-            os.environ["SEARCH_TAG_WEIGHT"] = str(int(getattr(viewer, "_search_tag_weight", 2)))
-        except Exception:
-            pass
+        # 환경변수 동기화는 하지 않습니다. 모든 동작은 config.yaml/메모리 설정 기준으로 수행합니다.
         # 확장 저장(QSettings)
         viewer.settings.setValue("ai/conf_threshold_pct", int(getattr(viewer, "_ai_conf_threshold_pct", 80)))
         viewer.settings.setValue("ai/apply_policy", str(getattr(viewer, "_ai_apply_policy", "보류")))
@@ -1317,7 +1452,26 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("ai/search_tag_weight", int(getattr(viewer, "_search_tag_weight", 2)))
         viewer.settings.setValue("ai/bg_index_max", int(getattr(viewer, "_bg_index_max", 200)))
         viewer.settings.setValue("ai/privacy_hide_location", bool(getattr(viewer, "_privacy_hide_location", False)))
-        viewer.settings.setValue("ai/offline_mode", bool(getattr(viewer, "_offline_mode", False)))
+        # 자연어 검색 정렬/필터/표시/백그라운드 저장
+        viewer.settings.setValue("ai/search_sort_order", str(getattr(viewer, "_search_sort_order", "similarity")))
+        viewer.settings.setValue("ai/search_filter/min_rating", int(getattr(viewer, "_search_filter_min_rating", 0)))
+        viewer.settings.setValue("ai/search_filter/flag_mode", str(getattr(viewer, "_search_filter_flag_mode", "any")))
+        viewer.settings.setValue("ai/search_filter/keywords", str(getattr(viewer, "_search_filter_keywords", "")))
+        viewer.settings.setValue("ai/search_filter/date_from", str(getattr(viewer, "_search_filter_date_from", "")))
+        viewer.settings.setValue("ai/search_filter/date_to", str(getattr(viewer, "_search_filter_date_to", "")))
+        viewer.settings.setValue("ai/search_result/thumb_size", int(getattr(viewer, "_search_result_thumb_size", 192)))
+        viewer.settings.setValue("ai/search_result/view_mode", str(getattr(viewer, "_search_result_view_mode", "grid")))
+        viewer.settings.setValue("ai/search_result/show_score", bool(getattr(viewer, "_search_show_score", True)))
+        viewer.settings.setValue("ai/search_result/show_in_filmstrip", bool(getattr(viewer, "_search_show_in_filmstrip", False)))
+        viewer.settings.setValue("ai/search/bg_prep_enabled", bool(getattr(viewer, "_search_bg_prep_enabled", False)))
+        # 임베딩/검증 고급 옵션 저장
+        viewer.settings.setValue("ai/search/use_embedding", bool(getattr(viewer, "_search_use_embedding", True)))
+        viewer.settings.setValue("ai/search/verify_strict_only", bool(getattr(viewer, "_search_verify_strict_only", True)))
+        viewer.settings.setValue("ai/search/verify_max_candidates", int(getattr(viewer, "_search_verify_max_candidates", 200)))
+        viewer.settings.setValue("ai/search/verify_workers", int(getattr(viewer, "_search_verify_workers", 16)))
+        viewer.settings.setValue("ai/search/blend_alpha", float(getattr(viewer, "_search_blend_alpha", 0.7)))
+        viewer.settings.setValue("ai/embed/batch_size", int(getattr(viewer, "_embed_batch_size", 64)))
+        viewer.settings.setValue("ai/embed/model", str(getattr(viewer, "_embed_model", "text-embedding-3-small")))
         # 표시/정보 상세
         viewer.settings.setValue("status/show_profile_details", bool(getattr(viewer, "_statusbar_show_profile_details", False)))
         # 즉시 디스크에 동기화하여 크래시 시 손실 방지

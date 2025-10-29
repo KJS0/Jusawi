@@ -412,21 +412,8 @@ class JusawiViewer(QMainWindow):
         # 색상 A/B 비교용 상태
         self._color_ab_show_original = False
 
-        # AI 분석 기본값(설정에서 로드/저장)
-        self._ai_language = "ko"           # "ko" | "en" | "system(ko)"
-        self._ai_tone = "중립"             # 표시용 문자열
-        self._ai_purpose = "archive"       # archive|sns|blog
-        self._ai_short_words = 16
-        self._ai_long_chars = 120
-        self._ai_fast_mode = False
-        self._ai_exif_level = "full"       # full|summary|none (summary=full 매핑)
-        self._ai_retry_count = 2
-        self._ai_retry_delay_ms = 800
-        self._ai_auto_on_open = False
-        self._ai_auto_on_drop = False
-        self._ai_auto_on_nav = False
-        self._ai_skip_if_cached = False
-        self._ai_openai_api_key = ""
+        # AI 분석 기본값은 load_settings에서 config.yaml/QSettings로 로드하므로
+        # 여기서 초기화하지 않습니다. (초기 실행 시 YAML 값이 덮어써지는 문제 방지)
         self._chain_ai_active = False
 
     def clamp(self, value, min_v, max_v):
@@ -1335,6 +1322,19 @@ class JusawiViewer(QMainWindow):
 
     def open_natural_search_dialog(self):
         dlg.open_natural_search_dialog(self)
+
+    def rerun_last_natural_search(self):
+        try:
+            q = str(getattr(self, "_last_natural_query", "") or "")
+        except Exception:
+            q = ""
+        try:
+            dlg.open_natural_search_dialog(self, initial_query=(q if q else None))
+        except Exception:
+            try:
+                dlg.open_natural_search_dialog(self)
+            except Exception:
+                pass
 
     # ----- AI 단축키 핸들러 -----
     def toggle_ai_language(self):

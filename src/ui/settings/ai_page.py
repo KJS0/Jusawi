@@ -5,6 +5,7 @@ from typing import Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QCheckBox, QComboBox, QSpinBox, QFormLayout,
+    QLineEdit, QDateEdit, QDoubleSpinBox
 )
 
 from .base import SettingsPage
@@ -172,12 +173,48 @@ class AISettingsPage(SettingsPage):
             form_adv.addRow("검색 상위 N(기본)", self.spin_verify_topn_default)
             form_adv.addRow("태그 가중치", self.spin_tag_weight)
             form_adv.addRow("폴더 진입 색인 최대", self.spin_bg_index_max)
+            # 임베딩/검증 고급 옵션
+            self.chk_search_use_embedding = QCheckBox("임베딩 사용(정확도↑, 속도↓)", self)
+            self.chk_search_verify_strict_only = QCheckBox("검증 통과 항목만 표시", self)
+            self.spin_search_verify_max = QSpinBox(self); self.spin_search_verify_max.setRange(1, 10000)
+            self.spin_search_verify_workers = QSpinBox(self); self.spin_search_verify_workers.setRange(1, 64)
+            self.spin_search_blend_alpha = QDoubleSpinBox(self); self.spin_search_blend_alpha.setRange(0.0, 1.0); self.spin_search_blend_alpha.setSingleStep(0.05); self.spin_search_blend_alpha.setDecimals(2)
+            self.spin_embed_batch = QSpinBox(self); self.spin_embed_batch.setRange(1, 2048)
+            self.ed_embed_model = QLineEdit(self)
+            form_adv.addRow("임베딩 사용", self.chk_search_use_embedding)
+            form_adv.addRow("검증 통과만", self.chk_search_verify_strict_only)
+            form_adv.addRow("검증 후보 최대", self.spin_search_verify_max)
+            form_adv.addRow("검증 병렬 작업 수", self.spin_search_verify_workers)
+            form_adv.addRow("블렌딩 알파(0~1)", self.spin_search_blend_alpha)
+            form_adv.addRow("임베딩 배치 크기", self.spin_embed_batch)
+            form_adv.addRow("임베딩 모델", self.ed_embed_model)
+            # 자연어 검색 표시/정렬/필터
+            self.combo_search_sort = QComboBox(self); self.combo_search_sort.addItems(["유사도", "최근 촬영일", "파일명"])
+            self.spin_search_min_rating = QSpinBox(self); self.spin_search_min_rating.setRange(0, 5)
+            self.combo_search_flag_mode = QComboBox(self); self.combo_search_flag_mode.addItems(["무관", "승낙만", "거절 제외"])
+            self.ed_search_keywords = QLineEdit(self)
+            self.date_search_from = QDateEdit(self); self.date_search_from.setCalendarPopup(True)
+            self.date_search_to = QDateEdit(self); self.date_search_to.setCalendarPopup(True)
+            self.spin_search_thumb_px = QSpinBox(self); self.spin_search_thumb_px.setRange(48, 512); self.spin_search_thumb_px.setSuffix(" px")
+            self.combo_search_view_mode = QComboBox(self); self.combo_search_view_mode.addItems(["격자", "리스트"])
+            self.chk_search_show_score = QCheckBox("관련도 점수 표시", self)
+            self.chk_search_show_in_filmstrip = QCheckBox("결과를 필름 스트립에 가상 컬렉션으로 표시", self)
+            self.chk_search_bg_prep = QCheckBox("폴더 진입 시 자연어 검색 준비(백그라운드)", self)
+            form_adv.addRow("검색 정렬", self.combo_search_sort)
+            form_adv.addRow("최소 별점", self.spin_search_min_rating)
+            form_adv.addRow("플래그 필터", self.combo_search_flag_mode)
+            form_adv.addRow("키워드(쉼표로 구분)", self.ed_search_keywords)
+            form_adv.addRow("촬영일 From", self.date_search_from)
+            form_adv.addRow("촬영일 To", self.date_search_to)
+            form_adv.addRow("썸네일 크기", self.spin_search_thumb_px)
+            form_adv.addRow("보기 모드", self.combo_search_view_mode)
+            form_adv.addRow("점수 표시", self.chk_search_show_score)
+            form_adv.addRow("필름 스트립 표시", self.chk_search_show_in_filmstrip)
+            form_adv.addRow("백그라운드 준비", self.chk_search_bg_prep)
             # 프라이버시/네트워크
             self.chk_privacy_hide_loc = QCheckBox("위치 숨김(주소/지도 차단)", self)
-            self.chk_offline_mode = QCheckBox("오프라인 모드(외부 호출 차단)", self)
             self.spin_http_timeout = QSpinBox(self); self.spin_http_timeout.setRange(1, 600); self.spin_http_timeout.setSuffix(" s")
             form_adv.addRow("프라이버시", self.chk_privacy_hide_loc)
-            form_adv.addRow("오프라인 모드", self.chk_offline_mode)
             form_adv.addRow("HTTP 타임아웃", self.spin_http_timeout)
             # 그룹박스 자체를 루트에 추가 (폼 레이아웃은 그룹박스의 레이아웃으로만 소유)
             root.addWidget(gb_adv)
@@ -287,6 +324,75 @@ class AISettingsPage(SettingsPage):
             self.spin_verify_topn_default.setValue(int(getattr(viewer, "_search_verify_topn_default", 20)))
         except Exception:
             self.spin_verify_topn_default.setValue(20)
+        # 자연어 검색 표시/정렬/필터
+        try:
+            so = str(getattr(viewer, "_search_sort_order", "similarity"))
+            self.combo_search_sort.setCurrentIndex({"similarity":0, "date_desc":1, "name_asc":2}.get(so, 0))
+        except Exception:
+            self.combo_search_sort.setCurrentIndex(0)
+        try:
+            self.spin_search_min_rating.setValue(int(getattr(viewer, "_search_filter_min_rating", 0)))
+        except Exception:
+            self.spin_search_min_rating.setValue(0)
+        try:
+            fm = str(getattr(viewer, "_search_filter_flag_mode", "any"))
+            self.combo_search_flag_mode.setCurrentIndex({"any":0, "pick_only":1, "exclude_rejected":2}.get(fm, 0))
+        except Exception:
+            self.combo_search_flag_mode.setCurrentIndex(0)
+        try:
+            self.ed_search_keywords.setText(str(getattr(viewer, "_search_filter_keywords", "") or ""))
+        except Exception:
+            self.ed_search_keywords.setText("")
+        # 날짜는 YYYY-MM-DD 문자열로 저장/로드
+        try:
+            from PyQt6.QtCore import QDate  # type: ignore
+            s = str(getattr(viewer, "_search_filter_date_from", "") or "")
+            if s:
+                y, m, d = [int(x) for x in s.split("-")]
+                self.date_search_from.setDate(QDate(y, m, d))
+            else:
+                self.date_search_from.clear()
+        except Exception:
+            pass
+        try:
+            from PyQt6.QtCore import QDate  # type: ignore
+            s = str(getattr(viewer, "_search_filter_date_to", "") or "")
+            if s:
+                y, m, d = [int(x) for x in s.split("-")]
+                self.date_search_to.setDate(QDate(y, m, d))
+            else:
+                self.date_search_to.clear()
+        except Exception:
+            pass
+        try:
+            self.spin_search_thumb_px.setValue(int(getattr(viewer, "_search_result_thumb_size", 192)))
+        except Exception:
+            self.spin_search_thumb_px.setValue(192)
+        try:
+            vm2 = str(getattr(viewer, "_search_result_view_mode", "grid"))
+            self.combo_search_view_mode.setCurrentIndex(0 if vm2 == "grid" else 1)
+        except Exception:
+            self.combo_search_view_mode.setCurrentIndex(0)
+        try:
+            self.chk_search_show_score.setChecked(bool(getattr(viewer, "_search_show_score", True)))
+        except Exception:
+            self.chk_search_show_score.setChecked(True)
+        try:
+            self.chk_search_show_in_filmstrip.setChecked(bool(getattr(viewer, "_search_show_in_filmstrip", False)))
+        except Exception:
+            self.chk_search_show_in_filmstrip.setChecked(False)
+        try:
+            self.chk_search_bg_prep.setChecked(bool(getattr(viewer, "_search_bg_prep_enabled", False)))
+        except Exception:
+            self.chk_search_bg_prep.setChecked(False)
+            # 임베딩/검증 고급 옵션 기본값
+            self.chk_search_use_embedding.setChecked(True)
+            self.chk_search_verify_strict_only.setChecked(True)
+            self.spin_search_verify_max.setValue(200)
+            self.spin_search_verify_workers.setValue(16)
+            self.spin_search_blend_alpha.setValue(0.7)
+            self.spin_embed_batch.setValue(64)
+            self.ed_embed_model.setText("text-embedding-3-small")
         try:
             self.spin_tag_weight.setValue(int(getattr(viewer, "_search_tag_weight", 2)))
         except Exception:
@@ -295,6 +401,35 @@ class AISettingsPage(SettingsPage):
             self.spin_bg_index_max.setValue(int(getattr(viewer, "_bg_index_max", 200)))
         except Exception:
             self.spin_bg_index_max.setValue(200)
+        # 임베딩/검증 고급 옵션 로드
+        try:
+            self.chk_search_use_embedding.setChecked(bool(getattr(viewer, "_search_use_embedding", True)))
+        except Exception:
+            self.chk_search_use_embedding.setChecked(True)
+        try:
+            self.chk_search_verify_strict_only.setChecked(bool(getattr(viewer, "_search_verify_strict_only", True)))
+        except Exception:
+            self.chk_search_verify_strict_only.setChecked(True)
+        try:
+            self.spin_search_verify_max.setValue(int(getattr(viewer, "_search_verify_max_candidates", 200)))
+        except Exception:
+            self.spin_search_verify_max.setValue(200)
+        try:
+            self.spin_search_verify_workers.setValue(int(getattr(viewer, "_search_verify_workers", 16)))
+        except Exception:
+            self.spin_search_verify_workers.setValue(16)
+        try:
+            self.spin_search_blend_alpha.setValue(float(getattr(viewer, "_search_blend_alpha", 0.7)))
+        except Exception:
+            self.spin_search_blend_alpha.setValue(0.7)
+        try:
+            self.spin_embed_batch.setValue(int(getattr(viewer, "_embed_batch_size", 64)))
+        except Exception:
+            self.spin_embed_batch.setValue(64)
+        try:
+            self.ed_embed_model.setText(str(getattr(viewer, "_embed_model", "text-embedding-3-small")))
+        except Exception:
+            self.ed_embed_model.setText("text-embedding-3-small")
         try:
             self.chk_privacy_hide_loc.setChecked(bool(getattr(viewer, "_privacy_hide_location", False)))
         except Exception:
@@ -415,12 +550,84 @@ class AISettingsPage(SettingsPage):
             viewer._bg_index_max = int(self.spin_bg_index_max.value())
         except Exception:
             pass
+        # 임베딩/검증 고급 옵션 저장
+        try:
+            viewer._search_use_embedding = bool(self.chk_search_use_embedding.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._search_verify_strict_only = bool(self.chk_search_verify_strict_only.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._search_verify_max_candidates = int(self.spin_search_verify_max.value())
+        except Exception:
+            pass
+        try:
+            viewer._search_verify_workers = int(self.spin_search_verify_workers.value())
+        except Exception:
+            pass
+        try:
+            viewer._search_blend_alpha = float(self.spin_search_blend_alpha.value())
+        except Exception:
+            pass
+        try:
+            viewer._embed_batch_size = int(self.spin_embed_batch.value())
+        except Exception:
+            pass
+        try:
+            viewer._embed_model = str(self.ed_embed_model.text()).strip() or "text-embedding-3-small"
+        except Exception:
+            pass
         try:
             viewer._privacy_hide_location = bool(self.chk_privacy_hide_loc.isChecked())
         except Exception:
             pass
+        # 자연어 검색 표시/정렬/필터
         try:
-            viewer._offline_mode = bool(self.chk_offline_mode.isChecked())
+            si = int(self.combo_search_sort.currentIndex())
+            viewer._search_sort_order = ("similarity" if si == 0 else ("date_desc" if si == 1 else "name_asc"))
+        except Exception:
+            pass
+        try:
+            viewer._search_filter_min_rating = int(self.spin_search_min_rating.value())
+        except Exception:
+            pass
+        try:
+            fi = int(self.combo_search_flag_mode.currentIndex())
+            viewer._search_filter_flag_mode = ("any" if fi == 0 else ("pick_only" if fi == 1 else "exclude_rejected"))
+        except Exception:
+            pass
+        try:
+            viewer._search_filter_keywords = str(self.ed_search_keywords.text()).strip()
+        except Exception:
+            pass
+        try:
+            df = self.date_search_from.date().toString("yyyy-MM-dd") if self.date_search_from.date().isValid() else ""
+            dt = self.date_search_to.date().toString("yyyy-MM-dd") if self.date_search_to.date().isValid() else ""
+            viewer._search_filter_date_from = df
+            viewer._search_filter_date_to = dt
+        except Exception:
+            pass
+        try:
+            viewer._search_result_thumb_size = int(self.spin_search_thumb_px.value())
+        except Exception:
+            pass
+        try:
+            vi = int(self.combo_search_view_mode.currentIndex())
+            viewer._search_result_view_mode = ("grid" if vi == 0 else "list")
+        except Exception:
+            pass
+        try:
+            viewer._search_show_score = bool(self.chk_search_show_score.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._search_show_in_filmstrip = bool(self.chk_search_show_in_filmstrip.isChecked())
+        except Exception:
+            pass
+        try:
+            viewer._search_bg_prep_enabled = bool(self.chk_search_bg_prep.isChecked())
         except Exception:
             pass
         try:
@@ -459,8 +666,25 @@ class AISettingsPage(SettingsPage):
             self.spin_tag_weight.setValue(2)
             self.spin_bg_index_max.setValue(200)
             self.chk_privacy_hide_loc.setChecked(False)
-            self.chk_offline_mode.setChecked(False)
             self.spin_http_timeout.setValue(120)
+            # 자연어 검색 표시/정렬/필터 기본값
+            self.combo_search_sort.setCurrentIndex(0)
+            self.spin_search_min_rating.setValue(0)
+            self.combo_search_flag_mode.setCurrentIndex(0)
+            self.ed_search_keywords.setText("")
+            try:
+                from PyQt6.QtCore import QDate  # type: ignore
+                self.date_search_from.setDate(QDate())
+                self.date_search_to.setDate(QDate())
+                self.date_search_from.clear()
+                self.date_search_to.clear()
+            except Exception:
+                pass
+            self.spin_search_thumb_px.setValue(192)
+            self.combo_search_view_mode.setCurrentIndex(0)
+            self.chk_search_show_score.setChecked(True)
+            self.chk_search_show_in_filmstrip.setChecked(False)
+            self.chk_search_bg_prep.setChecked(False)
         except Exception:
             pass
 

@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPixmap  # type: ignore[import]
 from .logging_setup import get_logger
 log = get_logger("utils.file")
 
-SUPPORTED_FORMATS = [".jpeg", ".jpg", ".png", ".bmp", ".gif", ".tiff", ".webp"]
+SUPPORTED_FORMATS = [".jpeg", ".jpg", ".png", ".bmp", ".gif", ".tiff", ".tif", ".webp"]
 
 if sys.platform == "win32":  # Windows
     try:

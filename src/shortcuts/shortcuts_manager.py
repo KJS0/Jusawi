@@ -82,6 +82,7 @@ COMMANDS: List[Command] = [
     Command("help_shortcuts", "단축키 도움말", "현재 단축키 표시", "도움말", "open_shortcuts_help", ["F1"], lock_key=True),
     # Natural language search
     Command("open_natural_search", "자연어 검색", "텍스트로 이미지 검색", "검색", "open_natural_search_dialog", ["Ctrl+K"]),
+    Command("rerun_natural_search", "자연어 재검색(최근 질의)", "최근 질의로 재검색", "검색", "rerun_last_natural_search", ["Ctrl+Shift+K"]),
 
     # AI 분석
     Command("open_ai_analysis", "AI 분석 실행", "현재 사진 분석", "AI", "open_ai_analysis_dialog", ["Ctrl+Shift+A"]),
