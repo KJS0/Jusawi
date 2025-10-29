@@ -20,11 +20,13 @@ class _SearchWorker(QObject):
     finished = pyqtSignal(list)
     failed = pyqtSignal(str)
 
-    def __init__(self, index: OnlineEmbeddingIndex, files: List[str], query: str):
+    def __init__(self, index: OnlineEmbeddingIndex, files: List[str], query: str, verify_mode: str, verify_top_n: int):
         super().__init__()
         self._index = index
         self._files = files
         self._query = query
+        self._vmode = verify_mode
+        self._vtop = int(max(0, verify_top_n))
 
     def run(self):
         try:
@@ -32,8 +34,8 @@ class _SearchWorker(QObject):
                 image_paths=self._files,
                 query_text=self._query,
                 top_k=int(os.getenv("SEARCH_TOP_K", "80") or 80),
-                verify_top_n=int(os.getenv("SEARCH_VERIFY_TOP_N", "20") or 20),
-                verify_mode=os.getenv("SEARCH_VERIFY_MODE", "normal") or "normal",
+                verify_top_n=self._vtop if self._vtop > 0 else int(os.getenv("SEARCH_VERIFY_TOP_N", "20") or 20),
+                verify_mode=(self._vmode or os.getenv("SEARCH_VERIFY_MODE", "normal") or "normal"),
                 progress_cb=lambda p, m: self.progress.emit(int(p), str(m)),
             )
             self.finished.emit(res)
@@ -42,7 +44,7 @@ class _SearchWorker(QObject):
 
 
 class NaturalSearchDialog(QDialog):
-    def __init__(self, parent=None, files: List[str] | None = None):
+    def __init__(self, parent=None, files: List[str] | None = None, initial_query: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("자연어 검색")
         self._files = files or []
@@ -64,11 +66,25 @@ class NaturalSearchDialog(QDialog):
             pass
         root.addWidget(QLabel("질의"))
         root.addWidget(self.query_edit)
+        try:
+            if initial_query:
+                self.query_edit.setPlainText(str(initial_query))
+        except Exception:
+            pass
 
         btn_row = QHBoxLayout()
         self.search_btn = QPushButton("검색")
         self.search_btn.clicked.connect(self._on_search)
         btn_row.addWidget(self.search_btn)
+        # 재검증 모드/상위 N
+        from PyQt6.QtWidgets import QComboBox, QSpinBox  # type: ignore[import]
+        self.combo_verify_mode = QComboBox(self)
+        self.combo_verify_mode.addItems(["엄격", "보통", "느슨함"])  # strict/normal/loose
+        self.spin_verify_topn = QSpinBox(self); self.spin_verify_topn.setRange(0, 500); self.spin_verify_topn.setValue(20)
+        btn_row.addWidget(QLabel("재검증"))
+        btn_row.addWidget(self.combo_verify_mode)
+        btn_row.addWidget(QLabel("상위 N"))
+        btn_row.addWidget(self.spin_verify_topn)
         btn_row.addStretch(1)
         self.open_btn = QPushButton("선택 열기")
         self.open_btn.clicked.connect(self._on_open_selected)
@@ -99,6 +115,15 @@ class NaturalSearchDialog(QDialog):
             self._progress.hide()
         except Exception:
             pass
+        # 기본값: 부모 뷰어 설정 반영
+        try:
+            viewer = self.parent()
+            if viewer is not None:
+                vm = str(getattr(viewer, "_search_verify_mode_default", "strict"))
+                self.combo_verify_mode.setCurrentIndex({"strict":0,"normal":1,"loose":2}.get(vm,0))  # type: ignore[attr-defined]
+                self.spin_verify_topn.setValue(int(getattr(viewer, "_search_verify_topn_default", 20)))  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     def _on_search(self):
         q = (self.query_edit.toPlainText() or "").strip()
@@ -114,8 +139,19 @@ class NaturalSearchDialog(QDialog):
         self._progress.setLabelText("검색 시작")
         self._progress.show()
 
+        # 모드/상위 N 읽기
+        try:
+            mi = int(self.combo_verify_mode.currentIndex())
+        except Exception:
+            mi = 1
+        mode = "strict" if mi == 0 else ("loose" if mi == 2 else "normal")
+        try:
+            topn = int(self.spin_verify_topn.value())
+        except Exception:
+            topn = 20
+
         self._thread = QThread(self)
-        self._worker = _SearchWorker(self._index, self._files, q)
+        self._worker = _SearchWorker(self._index, self._files, q, mode, topn)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)

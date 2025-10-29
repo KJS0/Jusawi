@@ -1,5 +1,7 @@
 import os
 from typing import Any, Dict
+import base64
+import hashlib
 
 try:
     import yaml  # type: ignore
@@ -65,14 +67,248 @@ def _merge_dict(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
     return dst
 
 
+def _kdf() -> bytes:
+    try:
+        user = (os.getenv("USERNAME") or os.getenv("USER") or "user").encode("utf-8")
+        host = (os.getenv("COMPUTERNAME") or (os.uname().nodename if hasattr(os, "uname") else "host")).encode("utf-8")
+        return hashlib.sha256(user + b"|" + host).digest()
+    except Exception:
+        return b"\x00" * 32
+
+
+def _xor_enc(data: bytes, key: bytes) -> bytes:
+    if not key:
+        return data
+    out = bytearray(len(data))
+    for i, b in enumerate(data):
+        out[i] = b ^ key[i % len(key)]
+    return bytes(out)
+
+
+def _encrypt_str(plain: str) -> str:
+    try:
+        if not plain:
+            return ""
+        raw = plain.encode("utf-8")
+        enc = _xor_enc(raw, _kdf())
+        return "enc:" + base64.urlsafe_b64encode(enc).decode("ascii")
+    except Exception:
+        return plain
+
+
+def _decrypt_str(value: str) -> str:
+    try:
+        if not value or not value.startswith("enc:"):
+            return value
+        b64 = value[4:]
+        enc = base64.urlsafe_b64decode(b64.encode("ascii"))
+        raw = _xor_enc(enc, _kdf())
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
 def _ensure_user_config_exists() -> str | None:
-    # config.yaml 사용 중단: 항상 QSettings만 사용
-    return None
+    # 최상위 실행 디렉터리의 config.yaml을 사용. 없으면 생성하지 않음(읽기 전용)
+    try:
+        for p in _default_config_paths():
+            if os.path.isfile(p):
+                return p
+        return None
+    except Exception:
+        return None
 
 
 def _load_yaml_configs() -> Dict[str, Any]:
-    # YAML 설정은 사용하지 않음(롤백)
-    return {}
+    # config.yaml들을 우선순위 병합하여 읽어온다(존재 시)
+    merged: Dict[str, Any] = {}
+    try:
+        for p in _default_config_paths():
+            data = _load_yaml_file(p)
+            if data:
+                _merge_dict(merged, data)
+    except Exception:
+        return {}
+    return merged
+
+
+def _primary_config_path() -> str:
+    try:
+        exe_dir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        return os.path.join(exe_dir, "config.yaml")
+    except Exception:
+        return os.path.abspath("config.yaml")
+
+
+def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
+    if yaml is None:
+        return
+    cfg: Dict[str, Any] = {}
+    try:
+        # edit
+        cfg["edit"] = {
+            "save_policy": str(getattr(viewer, "_save_policy", "discard")),
+            "jpeg_quality": int(getattr(viewer, "_jpeg_quality", 95)),
+        }
+        # color
+        cfg["color"] = {
+            "icc_ignore_embedded": bool(getattr(viewer, "_icc_ignore_embedded", False)),
+            "assumed_colorspace": str(getattr(viewer, "_assumed_colorspace", "sRGB")),
+            "preview_target": str(getattr(viewer, "_preview_target", "sRGB")),
+            "fallback_policy": str(getattr(viewer, "_fallback_policy", "ignore")),
+            "anim_convert": bool(getattr(viewer, "_convert_movie_frames_to_srgb", True)),
+            "thumb_convert": bool(getattr(viewer, "_thumb_convert_to_srgb", True)),
+        }
+        # open/session/recent
+        cfg["open"] = {
+            "scan_dir_after_open": bool(getattr(viewer, "_open_scan_dir_after_open", True)),
+            "remember_last_dir": bool(getattr(viewer, "_remember_last_open_dir", True)),
+        }
+        cfg["session"] = {
+            "startup_restore_policy": str(getattr(viewer, "_startup_restore_policy", "always")),
+        }
+        cfg["recent"] = {
+            "max_items": int(getattr(viewer, "_recent_max_items", 10)),
+            "auto_prune_missing": bool(getattr(viewer, "_recent_auto_prune_missing", True)),
+        }
+        # dir/tiff
+        cfg["dir"] = {
+            "sort_mode": str(getattr(viewer, "_dir_sort_mode", "metadata")),
+            "natural_sort": bool(getattr(viewer, "_dir_natural_sort", True)),
+            "exclude_hidden_system": bool(getattr(viewer, "_dir_exclude_hidden_system", True)),
+        }
+        cfg["tiff"] = {
+            "open_first_page_only": bool(getattr(viewer, "_tiff_open_first_page_only", True)),
+        }
+        # nav/ui
+        cfg["nav"] = {
+            "wrap_ends": bool(getattr(viewer, "_nav_wrap_ends", False)),
+            "min_interval_ms": int(getattr(viewer, "_nav_min_interval_ms", 100)),
+        }
+        cfg["ui"] = {
+            "filmstrip_auto_center": bool(getattr(viewer, "_filmstrip_auto_center", True)),
+        }
+        # view
+        cfg["view"] = {
+            "zoom_policy": str(getattr(viewer, "_zoom_policy", "mode")),
+            "default_view_mode": str(getattr(viewer, "_default_view_mode", "fit")),
+            "smooth_transform": bool(getattr(viewer, "_smooth_transform", True)),
+            "fit_margin_pct": int(getattr(viewer, "_fit_margin_pct", 0)),
+            "wheel_zoom_requires_ctrl": bool(getattr(viewer, "_wheel_zoom_requires_ctrl", True)),
+            "wheel_zoom_alt_precise": bool(getattr(viewer, "_wheel_zoom_alt_precise", True)),
+            "use_fixed_zoom_steps": bool(getattr(viewer, "_use_fixed_zoom_steps", False)),
+            "zoom_step_factor": float(getattr(viewer, "_zoom_step_factor", 1.25)),
+            "precise_zoom_step_factor": float(getattr(viewer, "_precise_zoom_step_factor", 1.1)),
+            "double_click_action": str(getattr(viewer, "_double_click_action", "toggle")),
+            "middle_click_action": str(getattr(viewer, "_middle_click_action", "none")),
+            "refit_on_transform": bool(getattr(viewer, "_refit_on_transform", True)),
+            "anchor_preserve_on_transform": bool(getattr(viewer, "_anchor_preserve_on_transform", True)),
+            "preserve_visual_size_on_dpr_change": bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)),
+            "pregen_scales_enabled": bool(getattr(viewer, "_pregen_scales_enabled", False)),
+            "pregen_scales": ",".join([str(x) for x in getattr(viewer, "_pregen_scales", [0.25,0.5,1.0,2.0])]),
+            "min_scale_pct": int(round(float(getattr(viewer, "min_scale", 0.01)) * 100)),
+            "max_scale_pct": int(round(float(getattr(viewer, "max_scale", 16.0)) * 100)),
+        }
+        # fullscreen/overlay
+        cfg["fullscreen"] = {
+            "auto_hide_ms": int(getattr(viewer, "_fs_auto_hide_ms", 1500)),
+            "auto_hide_cursor_ms": int(getattr(viewer, "_fs_auto_hide_cursor_ms", 1200)),
+            "enter_view_mode": str(getattr(viewer, "_fs_enter_view_mode", "keep")),
+            "show_filmstrip_overlay": bool(getattr(viewer, "_fs_show_filmstrip_overlay", False)),
+            "safe_exit_rule": bool(getattr(viewer, "_fs_safe_exit", True)),
+        }
+        cfg["overlay"] = {
+            "enabled_default": bool(getattr(viewer, "_overlay_enabled_default", False)),
+        }
+        # anim (overlay etc.)
+        cfg["anim"] = {
+            "autoplay": bool(getattr(viewer, "_anim_autoplay", True)),
+            "loop": bool(getattr(viewer, "_anim_loop", True)),
+            "keep_state_on_switch": bool(getattr(viewer, "_anim_keep_state_on_switch", False)),
+            "pause_on_unfocus": bool(getattr(viewer, "_anim_pause_on_unfocus", False)),
+            "click_toggle": bool(getattr(viewer, "_anim_click_toggle", False)),
+            "overlay": {
+                "enabled": bool(getattr(viewer, "_anim_overlay_enabled", False)),
+                "show_index": bool(getattr(viewer, "_anim_overlay_show_index", True)),
+                "position": str(getattr(viewer, "_anim_overlay_position", "top-right")),
+                "opacity": float(getattr(viewer, "_anim_overlay_opacity", 0.6)),
+            },
+        }
+        # prefetch/performance
+        cfg["prefetch"] = {
+            "thumbs_enabled": bool(getattr(viewer, "_enable_thumb_prefetch", True)),
+            "preload_radius": int(getattr(viewer, "_preload_radius", 2)),
+            "map_enabled": bool(getattr(viewer, "_enable_map_prefetch", True)),
+            "preload_direction": str(getattr(viewer, "_preload_direction", "both")),
+            "preload_priority": int(getattr(viewer, "_preload_priority", -1)),
+            "preload_max_concurrency": int(getattr(viewer, "_preload_max_concurrency", 0)),
+            "preload_retry_count": int(getattr(viewer, "_preload_retry_count", 0)),
+            "preload_retry_delay_ms": int(getattr(viewer, "_preload_retry_delay_ms", 0)),
+            "only_when_idle": bool(getattr(viewer, "_preload_only_when_idle", False)),
+            "prefetch_on_dir_enter": int(getattr(viewer, "_prefetch_on_dir_enter", 0)),
+            "slideshow_prefetch_count": int(getattr(viewer, "_slideshow_prefetch_count", 0)),
+            "fullres_upgrade_delay_ms": int(getattr(viewer, "_fullres_upgrade_delay_ms", 120)),
+            "preview_headroom": float(getattr(viewer, "_preview_headroom", 1.0)),
+            "disable_scaled_cache_below_100": bool(getattr(viewer, "_disable_scaled_cache_below_100", False)),
+            "preserve_visual_size_on_dpr_change": bool(getattr(viewer, "_preserve_visual_size_on_dpr_change", False)),
+        }
+        # advanced/cache
+        cfg["advanced"] = {
+            "image_cache_max_bytes": int(getattr(viewer, "_img_cache_max_bytes", 256*1024*1024)),
+            "scaled_cache_max_bytes": int(getattr(viewer, "_scaled_cache_max_bytes", 384*1024*1024)),
+            "cache_auto_shrink_pct": int(getattr(viewer, "_cache_auto_shrink_pct", 50)),
+            "cache_gc_interval_s": int(getattr(viewer, "_cache_gc_interval_s", 0)),
+        }
+        # thumb_cache
+        cfg["thumb_cache"] = {
+            "quality": int(getattr(viewer, "_thumb_cache_quality", 85)),
+            "dir": str(getattr(viewer, "_thumb_cache_dir", "")),
+        }
+        # ai
+        cfg["ai"] = {
+            "auto_on_open": bool(getattr(viewer, "_auto_ai_on_open", False)),
+            "auto_on_drop": bool(getattr(viewer, "_auto_ai_on_drop", False)),
+            "auto_on_nav": bool(getattr(viewer, "_auto_ai_on_nav", False)),
+            "auto_delay_ms": int(getattr(viewer, "_auto_ai_delay_ms", 0)),
+            "skip_if_cached": bool(getattr(viewer, "_ai_skip_if_cached", False)),
+            "language": str(getattr(viewer, "_ai_language", "ko")),
+            "tone": str(getattr(viewer, "_ai_tone", "중립")),
+            "purpose": str(getattr(viewer, "_ai_purpose", "archive")),
+            "short_words": int(getattr(viewer, "_ai_short_words", 16)),
+            "long_chars": int(getattr(viewer, "_ai_long_chars", 120)),
+            "fast_mode": bool(getattr(viewer, "_ai_fast_mode", False)),
+            "exif_level": str(getattr(viewer, "_ai_exif_level", "full")),
+            "retry_count": int(getattr(viewer, "_ai_retry_count", 2)),
+            "retry_delay_ms": int(getattr(viewer, "_ai_retry_delay_ms", 800)),
+            "openai_api_key": _encrypt_str(str(getattr(viewer, "_ai_openai_api_key", ""))),
+            "http_timeout_s": float(getattr(getattr(viewer, "_ai_cfg", None), "http_timeout_s", 120.0) if hasattr(viewer, "_ai_cfg") else 120.0),
+            # 확장 설정
+            "conf_threshold_pct": int(getattr(viewer, "_ai_conf_threshold_pct", 80)),
+            "apply_policy": str(getattr(viewer, "_ai_apply_policy", "보류")),
+            "batch_workers": int(getattr(viewer, "_ai_batch_workers", 4)),
+            "batch_delay_ms": int(getattr(viewer, "_ai_batch_delay_ms", 0)),
+            "batch_retry_count": int(getattr(viewer, "_ai_batch_retry_count", 0)),
+            "batch_retry_delay_ms": int(getattr(viewer, "_ai_batch_retry_delay_ms", 0)),
+            "search_verify_mode_default": str(getattr(viewer, "_search_verify_mode_default", "strict")),
+            "search_verify_topn_default": int(getattr(viewer, "_search_verify_topn_default", 20)),
+            "search_tag_weight": int(getattr(viewer, "_search_tag_weight", 2)),
+            "bg_index_max": int(getattr(viewer, "_bg_index_max", 200)),
+            "privacy_hide_location": bool(getattr(viewer, "_privacy_hide_location", False)),
+            "offline_mode": bool(getattr(viewer, "_offline_mode", False)),
+        }
+    except Exception:
+        pass
+
+    # 파일로 저장
+    try:
+        path = _primary_config_path()
+        parent_dir = os.path.dirname(path)
+        if parent_dir and not os.path.isdir(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=True)
+    except Exception:
+        pass
 
 
 def _apply_yaml_settings(viewer, cfg: Dict[str, Any]) -> None:
@@ -127,12 +363,114 @@ def _apply_yaml_settings(viewer, cfg: Dict[str, Any]) -> None:
                 viewer._img_cache_max_bytes = int(adv.get("image_cache_max_bytes"))
             if isinstance(adv.get("scaled_cache_max_bytes"), int):
                 viewer._scaled_cache_max_bytes = int(adv.get("scaled_cache_max_bytes"))
+        # AI 설정
+        ai = cfg.get("ai", {}) if isinstance(cfg, dict) else {}
+        if isinstance(ai, dict):
+            if isinstance(ai.get("auto_on_open"), bool):
+                viewer._auto_ai_on_open = bool(ai.get("auto_on_open"))
+            if isinstance(ai.get("auto_on_drop"), bool):
+                viewer._auto_ai_on_drop = bool(ai.get("auto_on_drop"))
+            if isinstance(ai.get("auto_on_nav"), bool):
+                viewer._auto_ai_on_nav = bool(ai.get("auto_on_nav"))
+            if isinstance(ai.get("auto_delay_ms"), int):
+                viewer._auto_ai_delay_ms = int(ai.get("auto_delay_ms"))
+            if isinstance(ai.get("skip_if_cached"), bool):
+                viewer._ai_skip_if_cached = bool(ai.get("skip_if_cached"))
+            if isinstance(ai.get("language"), str):
+                lang = str(ai.get("language")).strip().lower()
+                viewer._ai_language = "ko" if lang.startswith("ko") else ("en" if lang.startswith("en") else str(getattr(viewer, "_ai_language", "ko")))
+            if isinstance(ai.get("tone"), str):
+                t = str(ai.get("tone"))
+                if t in ("중립", "친근한", "공식적인"):
+                    viewer._ai_tone = t
+            if isinstance(ai.get("purpose"), str):
+                p = str(ai.get("purpose"))
+                if p in ("archive", "sns", "blog"):
+                    viewer._ai_purpose = p
+            if isinstance(ai.get("short_words"), int):
+                viewer._ai_short_words = int(ai.get("short_words"))
+            if isinstance(ai.get("long_chars"), int):
+                viewer._ai_long_chars = int(ai.get("long_chars"))
+            if isinstance(ai.get("fast_mode"), bool):
+                viewer._ai_fast_mode = bool(ai.get("fast_mode"))
+            if isinstance(ai.get("exif_level"), str):
+                e = str(ai.get("exif_level"))
+                if e in ("full", "summary", "none"):
+                    viewer._ai_exif_level = e
+            if isinstance(ai.get("retry_count"), int):
+                viewer._ai_retry_count = int(ai.get("retry_count"))
+            if isinstance(ai.get("retry_delay_ms"), int):
+                viewer._ai_retry_delay_ms = int(ai.get("retry_delay_ms"))
+            if isinstance(ai.get("openai_api_key"), str):
+                viewer._ai_openai_api_key = str(ai.get("openai_api_key"))
+            # 확장 로드
+            try:
+                viewer._ai_conf_threshold_pct = int(ai.get("conf_threshold_pct", 80))
+            except Exception:
+                pass
+            try:
+                viewer._ai_apply_policy = str(ai.get("apply_policy", "보류"))
+            except Exception:
+                pass
+            try:
+                viewer._ai_batch_workers = int(ai.get("batch_workers", 4))
+            except Exception:
+                pass
+            try:
+                viewer._ai_batch_delay_ms = int(ai.get("batch_delay_ms", 0))
+            except Exception:
+                pass
+            try:
+                viewer._ai_batch_retry_count = int(ai.get("batch_retry_count", 0))
+            except Exception:
+                pass
+            try:
+                viewer._ai_batch_retry_delay_ms = int(ai.get("batch_retry_delay_ms", 0))
+            except Exception:
+                pass
+            try:
+                viewer._search_verify_mode_default = str(ai.get("search_verify_mode_default", "strict"))
+            except Exception:
+                pass
+            try:
+                viewer._search_verify_topn_default = int(ai.get("search_verify_topn_default", 20))
+            except Exception:
+                pass
+            try:
+                viewer._search_tag_weight = int(ai.get("search_tag_weight", 2))
+            except Exception:
+                pass
+            try:
+                viewer._bg_index_max = int(ai.get("bg_index_max", 200))
+            except Exception:
+                pass
+            try:
+                viewer._privacy_hide_location = bool(ai.get("privacy_hide_location", False))
+            except Exception:
+                pass
+            try:
+                viewer._offline_mode = bool(ai.get("offline_mode", False))
+            except Exception:
+                pass
+            # HTTP 타임아웃: AIConfig가 있는 경우에만 설정 반영(없으면 무시)
+            try:
+                if isinstance(ai.get("http_timeout_s"), (int, float)):
+                    cfg = getattr(viewer, "_ai_cfg", None)
+                    if cfg is not None and hasattr(cfg, "http_timeout_s"):
+                        cfg.http_timeout_s = float(ai.get("http_timeout_s"))
+            except Exception:
+                pass
     except Exception:
         pass
 
 
 def load_settings(viewer) -> None:
     try:
+        # config.yaml 사전 로드(나중에 QSettings 로드 후 최종적으로 덮어쓰기)
+        try:
+            _cfg_yaml_cached = _load_yaml_configs()
+        except Exception:
+            _cfg_yaml_cached = {}
         # QSettings 캐시 초기화: 잘못 저장된 고정/제거 키값 제거
         try:
             if hasattr(viewer, "settings"):
@@ -405,9 +743,115 @@ def load_settings(viewer) -> None:
         except Exception:
             viewer._auto_ai_on_open = False
         try:
+            viewer._auto_ai_on_drop = bool(viewer.settings.value("ai/auto_on_drop", False, bool))
+        except Exception:
+            viewer._auto_ai_on_drop = False
+        try:
+            viewer._auto_ai_on_nav = bool(viewer.settings.value("ai/auto_on_nav", False, bool))
+        except Exception:
+            viewer._auto_ai_on_nav = False
+        try:
             viewer._auto_ai_delay_ms = int(viewer.settings.value("ai/auto_delay_ms", 0))
         except Exception:
             viewer._auto_ai_delay_ms = 0
+        try:
+            viewer._ai_skip_if_cached = bool(viewer.settings.value("ai/skip_if_cached", False, bool))
+        except Exception:
+            viewer._ai_skip_if_cached = False
+        # AI 기본값
+        try:
+            viewer._ai_language = str(viewer.settings.value("ai/language", "ko", str))
+        except Exception:
+            viewer._ai_language = "ko"
+        try:
+            viewer._ai_tone = str(viewer.settings.value("ai/tone", "중립", str))
+        except Exception:
+            viewer._ai_tone = "중립"
+        try:
+            viewer._ai_purpose = str(viewer.settings.value("ai/purpose", "archive", str))
+        except Exception:
+            viewer._ai_purpose = "archive"
+        try:
+            viewer._ai_short_words = int(viewer.settings.value("ai/short_words", 16))
+        except Exception:
+            viewer._ai_short_words = 16
+        try:
+            viewer._ai_long_chars = int(viewer.settings.value("ai/long_chars", 120))
+        except Exception:
+            viewer._ai_long_chars = 120
+        try:
+            viewer._ai_fast_mode = bool(viewer.settings.value("ai/fast_mode", False, bool))
+        except Exception:
+            viewer._ai_fast_mode = False
+        try:
+            viewer._ai_exif_level = str(viewer.settings.value("ai/exif_level", "full", str))
+        except Exception:
+            viewer._ai_exif_level = "full"
+        try:
+            viewer._ai_retry_count = int(viewer.settings.value("ai/retry_count", 2))
+        except Exception:
+            viewer._ai_retry_count = 2
+        try:
+            viewer._ai_retry_delay_ms = int(viewer.settings.value("ai/retry_delay_ms", 800))
+        except Exception:
+            viewer._ai_retry_delay_ms = 800
+        try:
+            _raw_key = str(viewer.settings.value("ai/openai_api_key", "", str))
+        except Exception:
+            _raw_key = ""
+        try:
+            viewer._ai_openai_api_key = _decrypt_str(_raw_key)
+        except Exception:
+            viewer._ai_openai_api_key = _raw_key
+        # 확장 로드(QSettings)
+        try:
+            viewer._ai_conf_threshold_pct = int(viewer.settings.value("ai/conf_threshold_pct", 80))
+        except Exception:
+            viewer._ai_conf_threshold_pct = 80
+        try:
+            viewer._ai_apply_policy = str(viewer.settings.value("ai/apply_policy", "보류", str))
+        except Exception:
+            viewer._ai_apply_policy = "보류"
+        try:
+            viewer._ai_batch_workers = int(viewer.settings.value("ai/batch_workers", 4))
+        except Exception:
+            viewer._ai_batch_workers = 4
+        try:
+            viewer._ai_batch_delay_ms = int(viewer.settings.value("ai/batch_delay_ms", 0))
+        except Exception:
+            viewer._ai_batch_delay_ms = 0
+        try:
+            viewer._ai_batch_retry_count = int(viewer.settings.value("ai/batch_retry_count", 0))
+        except Exception:
+            viewer._ai_batch_retry_count = 0
+        try:
+            viewer._ai_batch_retry_delay_ms = int(viewer.settings.value("ai/batch_retry_delay_ms", 0))
+        except Exception:
+            viewer._ai_batch_retry_delay_ms = 0
+        try:
+            viewer._search_verify_mode_default = str(viewer.settings.value("ai/search_verify_mode_default", "strict", str))
+        except Exception:
+            viewer._search_verify_mode_default = "strict"
+        try:
+            viewer._search_verify_topn_default = int(viewer.settings.value("ai/search_verify_topn_default", 20))
+        except Exception:
+            viewer._search_verify_topn_default = 20
+        try:
+            viewer._search_tag_weight = int(viewer.settings.value("ai/search_tag_weight", 2))
+        except Exception:
+            viewer._search_tag_weight = 2
+        try:
+            viewer._bg_index_max = int(viewer.settings.value("ai/bg_index_max", 200))
+        except Exception:
+            viewer._bg_index_max = 200
+        try:
+            viewer._privacy_hide_location = bool(viewer.settings.value("ai/privacy_hide_location", False, bool))
+        except Exception:
+            viewer._privacy_hide_location = False
+        try:
+            viewer._offline_mode = bool(viewer.settings.value("ai/offline_mode", False, bool))
+        except Exception:
+            viewer._offline_mode = False
         # Navigation/Filmstrip/Zoom 정책 추가
         try:
             viewer._nav_wrap_ends = bool(viewer.settings.value("nav/wrap_ends", False, bool))
@@ -548,7 +992,12 @@ def load_settings(viewer) -> None:
             viewer._thumb_cache_dir = str(viewer.settings.value("thumb_cache/dir", "", str))
         except Exception:
             viewer._thumb_cache_dir = ""
-        # YAML 구성 로드 제거(롤백)
+        # YAML 구성 최종 적용: QSettings에서 읽은 값 위에 덮어써서 사용자가 명시한 config.yaml이 우선
+        try:
+            if _cfg_yaml_cached:
+                _apply_yaml_settings(viewer, _cfg_yaml_cached)
+        except Exception:
+            pass
     except Exception:
         viewer.recent_files = []
         viewer.recent_folders = []
@@ -564,6 +1013,7 @@ def load_settings(viewer) -> None:
 
 def save_settings(viewer) -> None:
     try:
+        # QSettings 저장
         viewer.settings.setValue("recent/files", viewer.recent_files)
         viewer.settings.setValue("recent/folders", viewer.recent_folders)
         viewer.settings.setValue("recent/last_open_dir", viewer.last_open_dir)
@@ -664,9 +1114,58 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("prefetch/preload_max_concurrency", int(getattr(viewer, "_preload_max_concurrency", 0)))
         # 자동화 저장
         viewer.settings.setValue("ai/auto_on_open", bool(getattr(viewer, "_auto_ai_on_open", False)))
+        viewer.settings.setValue("ai/auto_on_drop", bool(getattr(viewer, "_auto_ai_on_drop", False)))
+        viewer.settings.setValue("ai/auto_on_nav", bool(getattr(viewer, "_auto_ai_on_nav", False)))
         viewer.settings.setValue("ai/auto_delay_ms", int(getattr(viewer, "_auto_ai_delay_ms", 0)))
+        viewer.settings.setValue("ai/skip_if_cached", bool(getattr(viewer, "_ai_skip_if_cached", False)))
+        # AI 기본값 저장
+        viewer.settings.setValue("ai/language", str(getattr(viewer, "_ai_language", "ko")))
+        viewer.settings.setValue("ai/tone", str(getattr(viewer, "_ai_tone", "중립")))
+        viewer.settings.setValue("ai/purpose", str(getattr(viewer, "_ai_purpose", "archive")))
+        viewer.settings.setValue("ai/short_words", int(getattr(viewer, "_ai_short_words", 16)))
+        viewer.settings.setValue("ai/long_chars", int(getattr(viewer, "_ai_long_chars", 120)))
+        viewer.settings.setValue("ai/fast_mode", bool(getattr(viewer, "_ai_fast_mode", False)))
+        viewer.settings.setValue("ai/exif_level", str(getattr(viewer, "_ai_exif_level", "full")))
+        viewer.settings.setValue("ai/retry_count", int(getattr(viewer, "_ai_retry_count", 2)))
+        viewer.settings.setValue("ai/retry_delay_ms", int(getattr(viewer, "_ai_retry_delay_ms", 800)))
+        viewer.settings.setValue("ai/openai_api_key", _encrypt_str(str(getattr(viewer, "_ai_openai_api_key", ""))))
+        # 즉시 환경변수 반영(프로세스 범위)
+        try:
+            if bool(getattr(viewer, "_offline_mode", False)):
+                os.environ["OFFLINE_MODE"] = "1"
+            else:
+                os.environ.pop("OFFLINE_MODE", None)
+        except Exception:
+            pass
+        try:
+            os.environ["SEARCH_TAG_WEIGHT"] = str(int(getattr(viewer, "_search_tag_weight", 2)))
+        except Exception:
+            pass
+        # 확장 저장(QSettings)
+        viewer.settings.setValue("ai/conf_threshold_pct", int(getattr(viewer, "_ai_conf_threshold_pct", 80)))
+        viewer.settings.setValue("ai/apply_policy", str(getattr(viewer, "_ai_apply_policy", "보류")))
+        viewer.settings.setValue("ai/batch_workers", int(getattr(viewer, "_ai_batch_workers", 4)))
+        viewer.settings.setValue("ai/batch_delay_ms", int(getattr(viewer, "_ai_batch_delay_ms", 0)))
+        viewer.settings.setValue("ai/batch_retry_count", int(getattr(viewer, "_ai_batch_retry_count", 0)))
+        viewer.settings.setValue("ai/batch_retry_delay_ms", int(getattr(viewer, "_ai_batch_retry_delay_ms", 0)))
+        viewer.settings.setValue("ai/search_verify_mode_default", str(getattr(viewer, "_search_verify_mode_default", "strict")))
+        viewer.settings.setValue("ai/search_verify_topn_default", int(getattr(viewer, "_search_verify_topn_default", 20)))
+        viewer.settings.setValue("ai/search_tag_weight", int(getattr(viewer, "_search_tag_weight", 2)))
+        viewer.settings.setValue("ai/bg_index_max", int(getattr(viewer, "_bg_index_max", 200)))
+        viewer.settings.setValue("ai/privacy_hide_location", bool(getattr(viewer, "_privacy_hide_location", False)))
+        viewer.settings.setValue("ai/offline_mode", bool(getattr(viewer, "_offline_mode", False)))
         # 표시/정보 상세
         viewer.settings.setValue("status/show_profile_details", bool(getattr(viewer, "_statusbar_show_profile_details", False)))
+        # 즉시 디스크에 동기화하여 크래시 시 손실 방지
+        try:
+            viewer.settings.sync()
+        except Exception:
+            pass
+        # config.yaml로도 내보내기(없으면 생성)
+        try:
+            _export_viewer_to_yaml(viewer)
+        except Exception:
+            pass
     except Exception:
         pass
 

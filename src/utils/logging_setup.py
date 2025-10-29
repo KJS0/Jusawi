@@ -20,6 +20,12 @@ class _SessionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
         if not hasattr(record, "session_id"):
             record.session_id = _SESSION_ID
+        # 민감정보 마스킹
+        try:
+            if hasattr(record, "msg") and isinstance(record.msg, str):
+                record.msg = _mask_sensitive(record.msg)
+        except Exception:
+            pass
         try:
             _maybe_snapshot_on_error(record)
         except Exception:
@@ -103,6 +109,19 @@ def set_level(level: str) -> None:
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
+
+
+def _mask_sensitive(text: str) -> str:
+    try:
+        import re
+        s = str(text)
+        # OpenAI style keys sk-... (project/service keys 포함: sk-로 시작하고 16+ 길이)
+        s = re.sub(r"sk-[A-Za-z0-9_\-]{16,}", "sk-****", s)
+        # API key JSON 필드 마스킹
+        s = re.sub(r"(openai_api_key\"?\s*[:=]\s*\"?)[^\"\s]{6,}(\"?)", r"\1****\2", s, flags=re.IGNORECASE)
+        return s
+    except Exception:
+        return text
 
 
 def get_log_dir() -> str:

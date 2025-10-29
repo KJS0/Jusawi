@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover
 # 프록시/외부 HTTP 클라이언트 사용 안 함
 
 from ..utils.logging_setup import get_logger
+from ..storage.settings_store import load_settings as _load_settings  # only for type hints
 
 _log = get_logger("svc.AIAnalysis")
 
@@ -55,6 +56,28 @@ class AnalysisContext:
     user_keywords: Optional[str] = None
     # OpenAI Vision detail level: "low" | "high" | "auto"
     detail: str = "auto"
+
+
+@dataclass
+class AIConfig:
+    provider: str = "openai"
+    model: str = "gpt-5-nano"  # allow-only policy is enforced by UI if needed
+    api_key: str = ""
+    # Behavior
+    fast_mode: bool = False
+    exif_level: str = "full"  # full|summary|none (summary는 현재 full과 동치로 처리)
+    retry_count: int = 1
+    retry_delay_s: float = 0.8
+    http_timeout_s: float = 120.0
+    # Cache
+    cache_enable: bool = True
+    cache_ttl_s: int = 0  # 0=forever
+    cache_dir: str = os.path.join(os.path.expanduser("~"), ".jusawi_ai_cache")
+    # Image preprocess
+    img_max_side: int = 1024
+    img_min_side: int = 512
+    img_jpeg_quality: int = 80
+    img_target_bytes: int = 600000
 
 
 def _extract_exif_summary(image_path: str) -> Dict[str, Any]:
@@ -354,29 +377,48 @@ def _preprocess_image_for_model(
     if Image is None or not os.path.exists(image_path):
         return None
     try:
-        # 환경변수 기반 기본값 로딩
-        def _iv(name: str, default: int) -> int:
-            v = os.getenv(name)
-            try:
-                return int(v) if v is not None and str(v).strip() != "" else default
-            except Exception:
-                return default
-
-        FAST = os.getenv("AI_FAST_MODE", "0") == "1"
-        max_side_val = max_side if isinstance(max_side, int) else _iv("AI_IMG_MAX_SIDE", 1024)
-        if FAST:
-            max_side_val = min(max_side_val, 768)
-        max_side_val = max(256, min(2048, int(max_side_val)))
-        min_side_val = min_side if isinstance(min_side, int) else _iv("AI_IMG_MIN_SIDE", 512)
-        min_side_val = max(128, min(max_side_val, int(min_side_val)))
-        base_quality = jpeg_quality if isinstance(jpeg_quality, int) else _iv("AI_IMG_JPEG_QUALITY", 80)
-        if FAST:
-            base_quality = min(base_quality, 70)
-        base_quality = max(40, min(95, int(base_quality)))
-        budget = target_bytes if isinstance(target_bytes, int) else _iv("AI_IMG_TARGET_BYTES", 600000)
-        if FAST:
-            budget = min(budget, 350000)
-        budget = max(100_000, min(2_000_000, int(budget)))
+        cfg = getattr(globals().get('CURRENT_AI_CONFIG', None), 'value', None)
+        # 서비스 인스턴스의 cfg에 접근하기 어렵기 때문에, 상위에서 호출 전 설정을 반영하도록 유지.
+        # 여기서는 AIAnalysisService.analyze에서 FAST와 인코딩 파라미터를 직접 전달하지 않으므로 서비스의 _cfg를 조회하도록 변경.
+        try:
+            # 동적 import 없이 서비스 인스턴스에서 접근되도록, 모듈 전역의 백업을 사용하지 않고 기본값으로 계산
+            from inspect import currentframe, getouterframes
+            frame = currentframe()
+            outer = getouterframes(frame)
+            svc = None
+            for f in outer:
+                self_obj = f.frame.f_locals.get('self')
+                if self_obj and hasattr(self_obj, '_cfg') and hasattr(self_obj, '_model'):
+                    svc = self_obj
+                    break
+            if svc is not None:
+                FAST = bool(getattr(svc, '_cfg').fast_mode)
+                max_side_val = max_side if isinstance(max_side, int) else int(getattr(svc, '_cfg').img_max_side)
+                if FAST:
+                    max_side_val = min(max_side_val, 768)
+                max_side_val = max(256, min(2048, int(max_side_val)))
+                min_side_val = min_side if isinstance(min_side, int) else int(getattr(svc, '_cfg').img_min_side)
+                min_side_val = max(128, min(max_side_val, int(min_side_val)))
+                base_quality = jpeg_quality if isinstance(jpeg_quality, int) else int(getattr(svc, '_cfg').img_jpeg_quality)
+                if FAST:
+                    base_quality = min(base_quality, 70)
+                base_quality = max(40, min(95, int(base_quality)))
+                budget = target_bytes if isinstance(target_bytes, int) else int(getattr(svc, '_cfg').img_target_bytes)
+                if FAST:
+                    budget = min(budget, 350000)
+                budget = max(100_000, min(2_000_000, int(budget)))
+            else:
+                FAST = False
+                max_side_val = 1024
+                min_side_val = 512
+                base_quality = 80
+                budget = 600000
+        except Exception:
+            FAST = False
+            max_side_val = 1024
+            min_side_val = 512
+            base_quality = 80
+            budget = 600000
 
         with Image.open(image_path) as im:
             im = im.convert("RGB")
@@ -473,15 +515,90 @@ def _build_prompt(context: AnalysisContext, exif_summary: Dict[str, Any]) -> str
 
 
 class AIAnalysisService:
-    """멀티모달 모델 호출 래퍼. 환경에 따라 폴백을 제공."""
+    """멀티모달 모델 호출 래퍼. 프로그램 설정만 사용한다."""
 
     def __init__(self):
-        self._provider = os.getenv("AI_PROVIDER", "openai")
-        # 안전한 기본값과 허용 목록 적용
-        env_model = (os.getenv("AI_MODEL", "gpt-5-nano") or "").strip()
-        allowed_models = {"gpt-5", "gpt-5-nano"}
-        self._model = env_model if env_model in allowed_models else "gpt-5-nano"
-        self._api_key = os.getenv("OPENAI_API_KEY")
+        # 기본 구성(실제 값은 apply_config로 주입)
+        self._cfg = AIConfig()
+        self._provider = self._cfg.provider
+        self._model = self._cfg.model
+        self._api_key = self._cfg.api_key
+        self._last_error: str = ""
+
+    def apply_config(self, cfg: AIConfig) -> None:
+        """런타임 설정을 주입한다. 환경 변수는 사용하지 않는다."""
+        if not isinstance(cfg, AIConfig):
+            return
+        self._cfg = cfg
+        self._provider = cfg.provider
+        self._model = cfg.model
+        self._api_key = cfg.api_key
+        self._last_error = ""
+
+    def get_last_error(self) -> str:
+        try:
+            return str(self._last_error or "")
+        except Exception:
+            return ""
+
+    def _extract_error_info(self, e: Exception) -> dict:
+        info: dict[str, any] = {
+            "type": type(e).__name__,
+            "message": str(e),
+            "status": None,
+            "code": None,
+            "request_id": None,
+            "body": None,
+            "text": None,
+        }
+        try:
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    info["status"] = getattr(resp, "status_code", None)
+                except Exception:
+                    pass
+                try:
+                    info["request_id"] = getattr(resp, "request_id", None) or (resp.headers.get("x-request-id") if hasattr(resp, "headers") else None)
+                except Exception:
+                    pass
+                # body/json
+                body = None
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = None
+                info["body"] = body
+                # code/type/message from body
+                try:
+                    err = (body or {}).get("error") if isinstance(body, dict) else None
+                    if isinstance(err, dict):
+                        info["code"] = err.get("code") or err.get("type")
+                        if not info.get("message") and err.get("message"):
+                            info["message"] = err.get("message")
+                except Exception:
+                    pass
+                # raw text fallback
+                try:
+                    txt = getattr(resp, "text", None)
+                    if isinstance(txt, str) and txt:
+                        info["text"] = txt[:500]
+                except Exception:
+                    pass
+            # some SDK errors expose .status_code/.code directly
+            try:
+                if not info.get("status"):
+                    info["status"] = getattr(e, "status_code", None)
+            except Exception:
+                pass
+            try:
+                if not info.get("code"):
+                    info["code"] = getattr(e, "code", None)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return info
 
     def analyze(
         self,
@@ -503,28 +620,37 @@ class AIAnalysisService:
                 return False
 
         ctx = context or AnalysisContext()
-        FAST = os.getenv("AI_FAST_MODE", "0") == "1"
+        FAST = bool(getattr(self, "_cfg", AIConfig()).fast_mode)
+        exif_level = str(getattr(self, "_cfg", AIConfig()).exif_level or "").strip().lower()
+        self._last_error = ""
         _p(5, "EXIF 요약 추출")
-        exif_summary = {} if FAST else _extract_exif_summary(image_path)
+        if exif_level == "none":
+            exif_summary = {}
+        else:
+            exif_summary = {} if FAST else _extract_exif_summary(image_path)
         if _c():
-            return self._fallback_result(exif_summary, note="사용자 취소")
+            self._last_error = "사용자 취소"
+            return self._fallback_result(exif_summary, note=self._last_error)
         _p(10, "프롬프트 구성")
         user_prompt = _build_prompt(ctx, exif_summary)
         # 캐시 조회
         try:
-            key = self._cache_key(image_path, ctx)
-            cpath = self._cache_path(key)
-            cached = self._load_cache(cpath)
-            if cached is not None:
-                _p(95, "캐시 적중")
-                _p(100, "완료")
-                return cached
+            cache_enabled = bool(getattr(self, "_cfg", AIConfig()).cache_enable)
+            if cache_enabled:
+                key = self._cache_key(image_path, ctx)
+                cpath = self._cache_path(key)
+                cached = self._load_cache(cpath)
+                if cached is not None:
+                    _p(95, "캐시 적중")
+                    _p(100, "완료")
+                    return cached
         except Exception:
             pass
         _p(20, "이미지 전처리")
         img_bytes = _preprocess_image_for_model(image_path)
         if img_bytes is None:
-            return self._fallback_result(exif_summary, note="이미지 전처리에 실패하여 텍스트 전용으로 폴백")
+            self._last_error = "이미지 전처리에 실패하여 텍스트 전용으로 폴백"
+            return self._fallback_result(exif_summary, note=self._last_error)
         if _c():
             return self._fallback_result(exif_summary, note="사용자 취소")
 
@@ -532,28 +658,45 @@ class AIAnalysisService:
             _p(60, "AI 모델 호출")
             result = self._call_openai_with_retry(image_bytes=img_bytes, prompt=user_prompt, context=ctx, progress=_p, is_cancelled=_c)
             if _c():
-                return self._fallback_result(exif_summary, note="사용자 취소")
+                self._last_error = "사용자 취소"
+                return self._fallback_result(exif_summary, note=self._last_error)
             _p(90, "결과 검증")
             out = self._validate_and_normalize(result, exif_summary)
             # 캐시 저장
             try:
-                self._save_cache(cpath, out)
+                cache_enabled = bool(getattr(self, "_cfg", AIConfig()).cache_enable)
+                if cache_enabled:
+                    self._save_cache(cpath, out)
             except Exception:
                 pass
             _p(100, "완료")
+            self._last_error = ""
             return out
         except Exception as e:
             try:
                 _log.warning("ai_call_fallback | err=%s", str(e))
             except Exception:
                 pass
-            return self._fallback_result(exif_summary, note=f"폴백: {type(e).__name__}")
+            self._last_error = f"요청 실패: {type(e).__name__} - {str(e)}"
+            return self._fallback_result(exif_summary, note=f"폴백: {type(e).__name__} | {str(e)}")
 
     def _cache_key(self, path: str, ctx: AnalysisContext) -> str:
+        def _sha1_file(p: str) -> str:
+            try:
+                h = hashlib.sha1()
+                with open(p, "rb") as fh:
+                    while True:
+                        chunk = fh.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                return h.hexdigest()
+            except Exception:
+                return hashlib.sha1((p + "|stat").encode("utf-8")).hexdigest()
         try:
-            st = os.stat(path)
+            content = _sha1_file(path)
             fast = os.getenv("AI_FAST_MODE", "0")
-            sig = f"{path}|{st.st_mtime_ns}|{ctx.language}|{ctx.long_caption_chars}|{ctx.short_caption_words}|{ctx.purpose}|{ctx.tone}|{self._model}|fast={fast}"
+            sig = f"{content}|{ctx.language}|{ctx.long_caption_chars}|{ctx.short_caption_words}|{ctx.purpose}|{ctx.tone}|{self._model}|fast={fast}"
             return hashlib.sha1(sig.encode("utf-8")).hexdigest()
         except Exception:
             return hashlib.sha1((path + "|fallback").encode("utf-8")).hexdigest()
@@ -568,6 +711,21 @@ class AIAnalysisService:
 
     def _load_cache(self, path: str) -> Optional[Dict[str, Any]]:
         try:
+            if not path or not os.path.isfile(path):
+                return None
+            # TTL 검사(초). 0=무제한
+            try:
+                ttl_s = int(getattr(self, "_cfg", AIConfig()).cache_ttl_s)
+            except Exception:
+                ttl_s = 0
+            if ttl_s and ttl_s > 0:
+                try:
+                    import time as _t
+                    mtime = os.path.getmtime(path)
+                    if (_t.time() - mtime) > ttl_s:
+                        return None
+                except Exception:
+                    pass
             with open(path, "r", encoding="utf-8") as fh:
                 return json.load(fh)
         except Exception:
@@ -582,8 +740,9 @@ class AIAnalysisService:
 
     def _call_openai_with_retry(self, image_bytes: bytes, prompt: str, context: AnalysisContext,
                                  progress: Callable[[int, str], None], is_cancelled: Callable[[], bool]) -> Dict[str, Any]:
-        max_attempts = int(os.getenv("AI_RETRY", "2"))
-        base_delay = float(os.getenv("AI_RETRY_DELAY", "0.8"))
+        # 요청이 오래 걸리므로 1회만 시도(요청사항)
+        max_attempts = 1
+        base_delay = float(getattr(self, "_cfg", AIConfig()).retry_delay_s)
         last_err: Optional[Exception] = None
         for attempt in range(1, max_attempts + 1):
             if is_cancelled():
@@ -601,6 +760,12 @@ class AIAnalysisService:
         raise last_err if last_err else RuntimeError("알 수 없는 오류")
 
     def _call_openai(self, image_bytes: bytes, prompt: str, context: AnalysisContext) -> Dict[str, Any]:
+        # 오프라인 모드: 외부 호출 차단
+        try:
+            if os.getenv("OFFLINE_MODE", "0") == "1":
+                raise RuntimeError("오프라인 모드")
+        except Exception:
+            pass
         if not self._api_key:
             raise RuntimeError("OPENAI_API_KEY 없음")
         # 이미지 base64 인라인 전송
@@ -628,9 +793,8 @@ class AIAnalysisService:
         except Exception as e:
             raise RuntimeError(f"openai SDK 로드 실패: {e}")
 
-        from openai import OpenAI  # type: ignore
         try:
-            timeout_s = float(os.getenv("AI_HTTP_TIMEOUT", "20"))
+            timeout_s = float(getattr(self, "_cfg", AIConfig()).http_timeout_s)
         except Exception:
             timeout_s = 20.0
         client = OpenAI(api_key=self._api_key, timeout=timeout_s)
@@ -655,15 +819,27 @@ class AIAnalysisService:
             text = comp.choices[0].message.content or "{}"
             return json.loads(text)
         except Exception as e:
-            # 400 등 오류 내용 로깅 시도
+            # 상태/코드/본문/요청ID까지 최대한 추출해 로깅
+            info = self._extract_error_info(e)
             try:
-                body = getattr(getattr(e, "response", None), "json", lambda: {})()
-                _log.warning("openai_chat_fail | model=%s | body=%s", self._model, body)
+                _log.warning(
+                    "openai_chat_fail | model=%s | status=%s | code=%s | rid=%s | body=%s | text=%s | type=%s",
+                    self._model,
+                    info.get("status"),
+                    info.get("code"),
+                    info.get("request_id"),
+                    info.get("body"),
+                    info.get("text"),
+                    info.get("type"),
+                )
             except Exception:
-                try:
-                    _log.warning("openai_chat_fail | model=%s | err=%s", self._model, str(e))
-                except Exception:
-                    pass
+                pass
+            # UI용 상세 오류도 보관
+            try:
+                rid = info.get("request_id")
+                self._last_error = f"OpenAI 오류 status={info.get('status')} code={info.get('code')} rid={rid} msg={info.get('message')}"
+            except Exception:
+                self._last_error = str(e)
             # 실패는 상위 재시도/폴백으로 넘긴다
             raise
 
@@ -699,6 +875,29 @@ class AIAnalysisService:
             gps["lat"] = exif_gps.get("lat")
         if gps.get("lon") is None and exif_gps.get("lon") is not None:
             gps["lon"] = exif_gps.get("lon")
+        # 역지오코딩으로 place_guess 보강(라이트웨이트, 오류 무시)
+        try:
+            if (gps.get("place_guess") in (None, "",)) and (gps.get("lat") is not None) and (gps.get("lon") is not None):
+                try:
+                    from .geocoding import geocoding_service  # type: ignore
+                except Exception:
+                    geocoding_service = None  # type: ignore
+                if geocoding_service is not None:
+                    # 언어: 분석 컨텍스트 언어 우선
+                    lang = "ko"
+                    try:
+                        # context는 호출부에서만 접근 가능하므로, place_guess는 한국어 기본으로 설정
+                        # 호출부에서 언어가 필요한 경우 NaturalSearch/뷰어에서 표시 언어로 포맷됨
+                        lang = str(getattr(getattr(self, "_ctx", None), "language", "ko") or "ko")  # type: ignore[attr-defined]
+                    except Exception:
+                        lang = "ko"
+                    addr = geocoding_service.get_address_from_coordinates(float(gps.get("lat")), float(gps.get("lon")), language=lang)
+                    if isinstance(addr, dict):
+                        pg = addr.get("formatted") or addr.get("full_address")
+                        if isinstance(pg, str) and pg.strip():
+                            gps["place_guess"] = str(pg)
+        except Exception:
+            pass
         result["gps"] = gps
 
         # 최소 검증
@@ -712,6 +911,43 @@ class AIAnalysisService:
             result["confidence"] = 0.0
         if not isinstance(result.get("notes"), str):
             result["notes"] = ""
+        # 태그 정규화: 소문자/공백정리/중복 제거/금지어 필터
+        try:
+            raw_tags = [str(t) for t in (result.get("tags") or [])]
+            norm: list[str] = []
+            seen = set()
+            deny = {"nike", "apple", "samsung", "facebook", "google"}
+            for t in raw_tags:
+                s = t.strip().lower().lstrip("#")
+                if not s or s in deny:
+                    continue
+                if s not in seen:
+                    seen.add(s)
+                    norm.append(s)
+            # 사용자 규칙 적용(~/.jusawi/ai_tag_rules.json)
+            try:
+                import json as _json, os as _os
+                rules_path = _os.path.join(_os.path.expanduser("~"), ".jusawi", "ai_tag_rules.json")
+                if _os.path.isfile(rules_path):
+                    with open(rules_path, "r", encoding="utf-8") as fh:
+                        rules = _json.load(fh) or {}
+                    to_remove = set([str(x).strip().lower() for x in (rules.get("remove") or [])])
+                    repl = {str(k).strip().lower(): str(v).strip().lower() for k, v in (rules.get("replace") or {}).items()}
+                    out2: list[str] = []
+                    seen2 = set()
+                    for x in norm:
+                        if x in to_remove:
+                            continue
+                        y = repl.get(x, x)
+                        if y and y not in seen2:
+                            seen2.add(y)
+                            out2.append(y)
+                    norm = out2
+            except Exception:
+                pass
+            result["tags"] = norm
+        except Exception:
+            pass
         return result
 
     def _fallback_result(self, exif_summary: Dict[str, Any], note: str = "") -> Dict[str, Any]:
@@ -726,7 +962,7 @@ class AIAnalysisService:
         gps["lat"] = exif_gps.get("lat")
         gps["lon"] = exif_gps.get("lon")
         # 폴백 노트 및 보수적 신뢰도
-        result["notes"] = (note or "") + " | 모델 호출 실패로 텍스트 전용/기본값을 반환합니다."
+        result["notes"] = (note or "")
         result["confidence"] = 0.3
         return result
 

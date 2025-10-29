@@ -258,4 +258,42 @@ class SimilarityIndex:
             return self.similar_hnsw(anchor_path, dir_path, top_k=top_k)
         return self.similar_fast(anchor_path, dir_path, top_k=top_k)
 
+    # --- 중복/변형판 탐지: pHash 선별 + CLIP 확증 ---
+    def find_near_duplicates(self, dir_path: str, phash_max_hamming: int = 8, clip_min_score: float = 0.96) -> List[Tuple[str, str, float]]:
+        """
+        디렉터리 내 근접 중복 후보를 반환.
+        반환: [(path_a, path_b, score)] with score=CLIP 유사도
+        """
+        self.build_or_load(dir_path)
+        paths = sorted(list(self._index.keys()))
+        out: List[Tuple[str, str, float]] = []
+        # pHash가 없으면 CLIP만으로는 O(N^2) 비용이라 후보를 줄이기 어려움 → pHash 필수
+        if not _HAS_PHASH:
+            return out
+        # pHash 버킷으로 근접 후보 수집
+        phashes: List[Tuple[str, int]] = []
+        for p, rec in self._index.items():
+            ph = rec.get("phash")
+            if isinstance(ph, int):
+                phashes.append((p, int(ph)))
+        for i in range(len(phashes)):
+            pi, hi = phashes[i]
+            for j in range(i + 1, len(phashes)):
+                pj, hj = phashes[j]
+                d = self._hamming(hi, hj)
+                if d <= int(phash_max_hamming):
+                    # CLIP 유사도로 확증
+                    try:
+                        ai = self._vec_image(pi)
+                        aj = self._vec_image(pj)
+                        if ai is None or aj is None:
+                            continue
+                        sc = _cos(ai, aj)
+                        if sc >= float(clip_min_score):
+                            out.append((pi, pj, float(sc)))
+                    except Exception:
+                        pass
+        out.sort(key=lambda x: x[2], reverse=True)
+        return out
+
 

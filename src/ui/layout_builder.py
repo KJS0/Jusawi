@@ -34,6 +34,9 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.ai_button = QPushButton("AI 분석")
     viewer.ai_button.clicked.connect(viewer.open_ai_analysis_dialog)
 
+    # 배치 분석 버튼 제거
+    viewer.batch_ai_button = None
+
     # NEW: Natural language search button
     viewer.search_button = QPushButton("검색")
     viewer.search_button.clicked.connect(viewer.open_natural_search_dialog)
@@ -75,6 +78,7 @@ def build_top_and_status_bars(viewer) -> None:
         viewer.open_button,
         viewer.recent_button,
         viewer.info_button,
+        viewer.ai_button,
         viewer.settings_button,
         viewer.fullscreen_button,
         viewer.prev_button,
@@ -82,6 +86,8 @@ def build_top_and_status_bars(viewer) -> None:
         viewer.zoom_out_button,
         viewer.fit_button,
         viewer.zoom_in_button,
+        viewer.rotate_left_button,
+        viewer.rotate_right_button,
     ]:
         btn.setStyleSheet(button_style)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -92,6 +98,7 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.button_layout.addWidget(viewer.info_button)
     # EXIF 버튼 제거됨
     viewer.button_layout.addWidget(viewer.ai_button)
+    # 배치 버튼 제거됨
     viewer.button_layout.addWidget(viewer.search_button)
     # Similar search button
     try:

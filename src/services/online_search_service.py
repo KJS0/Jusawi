@@ -111,6 +111,27 @@ class OnlineEmbeddingIndex:
                 )
                 """
             )
+            # AI 태그/주제 저장 테이블(+캡션 컬럼 포함)
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tags (
+                    path TEXT PRIMARY KEY,
+                    tags TEXT,
+                    subjects TEXT,
+                    short_caption TEXT,
+                    long_caption TEXT
+                )
+                """
+            )
+            # 마이그레이션: 기존 DB에 누락 컬럼 추가(이미 있으면 무시)
+            try:
+                cur.execute("ALTER TABLE tags ADD COLUMN short_caption TEXT")
+            except Exception:
+                pass
+            try:
+                cur.execute("ALTER TABLE tags ADD COLUMN long_caption TEXT")
+            except Exception:
+                pass
             cur.execute("CREATE INDEX IF NOT EXISTS idx_vectors_model ON vectors(model)")
             con.commit()
         finally:
@@ -162,7 +183,7 @@ class OnlineEmbeddingIndex:
                     except Exception:
                         need = True
                 if need:
-                    doc = _build_doc_for_image(p)
+                    doc = self._build_doc_with_tags(p)
                     pending.append((p, doc, mt))
         finally:
             con.close()
@@ -200,6 +221,59 @@ class OnlineEmbeddingIndex:
                 con.close()
             i += B
         return created
+
+    def _build_doc_with_tags(self, path: str) -> str:
+        base = _build_doc_for_image(path)
+        # tags 테이블에서 불러와 결합
+        try:
+            con = sqlite3.connect(self._db_path)
+            try:
+                cur = con.cursor()
+                cur.execute("SELECT tags, subjects, short_caption, long_caption FROM tags WHERE path=?", (path,))
+                row = cur.fetchone()
+                if row is not None:
+                    t = str(row[0] or "").strip()
+                    s = str(row[1] or "").strip()
+                    sc = str(row[2] or "").strip()
+                    lc = str(row[3] or "").strip()
+                    parts = [base]
+                    if t:
+                        try:
+                            w = int(os.getenv("SEARCH_TAG_WEIGHT", "2") or 2)
+                        except Exception:
+                            w = 2
+                        w = max(1, min(5, w))
+                        parts.append("tags: " + ",".join([t] * w))
+                    if s:
+                        parts.append("subjects: " + s)
+                    if sc:
+                        parts.append("short_caption: " + sc)
+                    if lc:
+                        parts.append("long_caption: " + lc)
+                    return " | ".join(parts)
+            finally:
+                con.close()
+        except Exception:
+            pass
+        return base
+
+    def upsert_tags_subjects(self, path: str, tags: List[str] | None, subjects: List[str] | None,
+                              short_caption: Optional[str] = None, long_caption: Optional[str] = None) -> None:
+        if not path:
+            return
+        t = ",".join([str(x) for x in (tags or []) if str(x).strip()])
+        s = ",".join([str(x) for x in (subjects or []) if str(x).strip()])
+        con = sqlite3.connect(self._db_path)
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "INSERT INTO tags(path, tags, subjects, short_caption, long_caption) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(path) DO UPDATE SET tags=excluded.tags, subjects=excluded.subjects, short_caption=excluded.short_caption, long_caption=excluded.long_caption",
+                (path, t, s, (short_caption or ""), (long_caption or "")),
+            )
+            con.commit()
+        finally:
+            con.close()
 
     def _load_all_vectors(self, image_paths: List[str]) -> List[Tuple[str, List[float]]]:
         con = sqlite3.connect(self._db_path)

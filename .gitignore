@@ -54,3 +54,6 @@ desktop.ini
 # Env files
 .env
 .env.*
+
+# Config files
+config.yaml

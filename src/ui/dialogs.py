@@ -23,6 +23,12 @@ def open_settings_dialog(viewer: "JusawiViewer") -> None:
     if dlg is None:
         from .settings_dialog import SettingsDialog  # late import
     SettingsDialog = locals().get('SettingsDialog')
+    # 최신 config.yaml 반영을 위해 열기 직전에 다시 로드
+    try:
+        from ..storage.settings_store import load_settings as _reload_settings
+        _reload_settings(viewer)
+    except Exception:
+        pass
     d = SettingsDialog(viewer)
     viewer._settings_dialog = d
     d.load_from_viewer(viewer)
@@ -101,6 +107,25 @@ def open_ai_analysis_dialog(viewer: "JusawiViewer") -> None:
         from .ai_analysis_dialog import AIAnalysisDialog
         d = AIAnalysisDialog(viewer, image_path=viewer.current_image_path)
         d.resize(760, 600)
+        d.exec()
+    except Exception:
+        pass
+    finally:
+        try:
+            viewer._set_global_shortcuts_enabled(True)
+        except Exception:
+            pass
+
+
+def open_batch_ai_dialog(viewer: "JusawiViewer") -> None:
+    try:
+        viewer._set_global_shortcuts_enabled(False)
+    except Exception:
+        pass
+    try:
+        from .batch_ai_dialog import BatchAIDialog
+        d = BatchAIDialog(viewer)
+        d.resize(720, 520)
         d.exec()
     except Exception:
         pass

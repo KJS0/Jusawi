@@ -210,13 +210,29 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
             viewer._rating_flag_bar.setVisible(True)
     except Exception:
         pass
-    # 자동화: AI 분석 자동 실행
+    # 자동화: AI 분석 자동 실행 (세분화: 열기/드롭/이동, 캐시 건너뛰기)
     try:
-        if bool(getattr(viewer, "_auto_ai_on_open", False)) and (source in ("open", "drop", "nav")):
+        auto_open = bool(getattr(viewer, "_auto_ai_on_open", False)) and (source == "open")
+        auto_drop = bool(getattr(viewer, "_auto_ai_on_drop", False)) and (source == "drop")
+        auto_nav  = bool(getattr(viewer, "_auto_ai_on_nav", False)) and (source == "nav")
+        if auto_open or auto_drop or auto_nav:
             delay = max(0, int(getattr(viewer, "_auto_ai_delay_ms", 0)))
             from PyQt6.QtCore import QTimer  # type: ignore[import]
             def _run_ai():
                 try:
+                    # 캐시 건너뛰기: 이미 캐시가 있으면 생략
+                    if bool(getattr(viewer, "_ai_skip_if_cached", False)):
+                        try:
+                            from ..services.ai_analysis_service import AIAnalysisService, AnalysisContext
+                            svc = AIAnalysisService()
+                            ctx = AnalysisContext()
+                            # 내부 캐시 키 경로 접근하여 존재 시 생략
+                            key = svc._cache_key(viewer.current_image_path, ctx)
+                            cpath = svc._cache_path(key)
+                            if os.path.isfile(cpath):
+                                return
+                        except Exception:
+                            pass
                     viewer.open_ai_analysis_dialog()
                 except Exception:
                     pass

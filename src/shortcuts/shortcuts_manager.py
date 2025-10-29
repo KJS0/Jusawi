@@ -80,6 +80,11 @@ COMMANDS: List[Command] = [
     # Natural language search
     Command("open_natural_search", "자연어 검색", "텍스트로 이미지 검색", "검색", "open_natural_search_dialog", ["Ctrl+K"]),
 
+    # AI 분석
+    Command("open_ai_analysis", "AI 분석 실행", "현재 사진 분석", "AI", "open_ai_analysis_dialog", ["Ctrl+Shift+A"]),
+    Command("chain_ai_analysis", "연쇄 AI 분석 토글", "현재→다음 반복 분석 시작/중지", "AI", "toggle_chain_ai_analysis", ["Ctrl+Alt+A"]),
+    Command("toggle_ai_language", "AI 언어 전환", "분석 언어 한국어/영어 토글", "AI", "toggle_ai_language", ["Ctrl+L"]),
+
     # 최근 파일 빠른 실행 (Alt+1..9)
     Command("open_recent_1", "최근 파일 1", "최근 파일 1 열기", "파일", "_open_recent_1", ["Alt+1"]),
     Command("open_recent_2", "최근 파일 2", "최근 파일 2 열기", "파일", "_open_recent_2", ["Alt+2"]),

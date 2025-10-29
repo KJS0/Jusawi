@@ -412,6 +412,23 @@ class JusawiViewer(QMainWindow):
         # 색상 A/B 비교용 상태
         self._color_ab_show_original = False
 
+        # AI 분석 기본값(설정에서 로드/저장)
+        self._ai_language = "ko"           # "ko" | "en" | "system(ko)"
+        self._ai_tone = "중립"             # 표시용 문자열
+        self._ai_purpose = "archive"       # archive|sns|blog
+        self._ai_short_words = 16
+        self._ai_long_chars = 120
+        self._ai_fast_mode = False
+        self._ai_exif_level = "full"       # full|summary|none (summary=full 매핑)
+        self._ai_retry_count = 2
+        self._ai_retry_delay_ms = 800
+        self._ai_auto_on_open = False
+        self._ai_auto_on_drop = False
+        self._ai_auto_on_nav = False
+        self._ai_skip_if_cached = False
+        self._ai_openai_api_key = ""
+        self._chain_ai_active = False
+
     def clamp(self, value, min_v, max_v):
         return util_clamp(value, min_v, max_v)
 
@@ -1313,8 +1330,82 @@ class JusawiViewer(QMainWindow):
     def open_ai_analysis_dialog(self):
         dlg.open_ai_analysis_dialog(self)
 
+    def open_batch_ai_dialog(self):
+        dlg.open_batch_ai_dialog(self)
+
     def open_natural_search_dialog(self):
         dlg.open_natural_search_dialog(self)
+
+    # ----- AI 단축키 핸들러 -----
+    def toggle_ai_language(self):
+        try:
+            cur = str(getattr(self, "_ai_language", "ko") or "ko")
+        except Exception:
+            cur = "ko"
+        try:
+            new_lang = "en" if cur.startswith("ko") else "ko"
+            self._ai_language = new_lang
+            try:
+                self.statusBar().showMessage(f"AI 언어: {'한국어' if new_lang=='ko' else '영어'}", 1500)
+            except Exception:
+                pass
+            # 즉시 저장
+            self.save_settings()
+        except Exception:
+            pass
+
+    def start_chain_ai_analysis(self):
+        """현재 사진부터 순차적으로 AI 분석 다이얼로그를 실행하고, 다음 사진으로 이동을 반복한다."""
+        if not (self.image_files_in_dir and 0 <= self.current_image_index < len(self.image_files_in_dir)):
+            try:
+                self.statusBar().showMessage("분석할 사진이 없습니다.", 2000)
+            except Exception:
+                pass
+            return
+        # 재진입 방지
+        if getattr(self, "_chain_ai_active", False):
+            return
+        self._chain_ai_active = True
+
+        def _step():
+            try:
+                if not getattr(self, "_chain_ai_active", False):
+                    return
+                if not (self.image_files_in_dir and 0 <= self.current_image_index < len(self.image_files_in_dir)):
+                    self._chain_ai_active = False
+                    return
+                # 현재 사진 분석(모달)
+                self.open_ai_analysis_dialog()
+                # 다음 사진으로 이동
+                if not getattr(self, "_chain_ai_active", False):
+                    return
+                if self.current_image_index + 1 < len(self.image_files_in_dir):
+                    self.show_next_image()
+                    from PyQt6.QtCore import QTimer  # type: ignore[import]
+                    QTimer.singleShot(0, _step)
+                else:
+                    self._chain_ai_active = False
+                    try:
+                        self.statusBar().showMessage("연쇄 분석 완료", 2000)
+                    except Exception:
+                        pass
+            except Exception:
+                self._chain_ai_active = False
+
+        _step()
+
+    def toggle_chain_ai_analysis(self):
+        try:
+            if getattr(self, "_chain_ai_active", False):
+                self._chain_ai_active = False
+                try:
+                    self.statusBar().showMessage("연쇄 분석 중지", 1500)
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+        self.start_chain_ai_analysis()
 
     def open_similar_search_dialog(self):
         cur = self.current_image_path or ""
@@ -1385,6 +1476,76 @@ class JusawiViewer(QMainWindow):
                     self.image_service.preload(paths, priority=prio)
             except Exception:
                 pass
+        # 백그라운드 자연어 검색 색인(임베딩) — 폴더 진입 시 비동기 수행
+        try:
+            files = getattr(self, "image_files_in_dir", []) or []
+            if files and bool(getattr(self, "_bg_index_on_dir_enter", True)):
+                try:
+                    maxn = int(getattr(self, "_bg_index_max", 200))
+                except Exception:
+                    maxn = 200
+                try:
+                    from threading import Thread
+                except Exception:
+                    Thread = None  # type: ignore
+                def _bg_index():
+                    try:
+                        from ..services.online_search_service import OnlineEmbeddingIndex  # type: ignore
+                        idx = OnlineEmbeddingIndex()
+                        idx.ensure_index(files[:max(1, int(maxn))], progress_cb=None)
+                        # 태그 가중치 환경 반영
+                        try:
+                            import os as _os
+                            _os.environ["SEARCH_TAG_WEIGHT"] = str(int(getattr(self, "_search_tag_weight", 2)))
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                if Thread is not None:
+                    try:
+                        t = Thread(target=_bg_index, daemon=True)
+                        t.start()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # 폴더 진입 시 AI 선분석(캐시 채우기, 다이얼로그 없이) — 옵션
+        try:
+            files = getattr(self, "image_files_in_dir", []) or []
+            if files and bool(getattr(self, "_auto_ai_prefetch_on_dir", False)):
+                try:
+                    maxn = int(getattr(self, "_auto_ai_prefetch_count", 10))
+                except Exception:
+                    maxn = 10
+                head = files[:max(1, int(maxn))]
+                from threading import Thread
+                def _prefetch_ai(paths: list[str]):
+                    try:
+                        from ..services.ai_analysis_service import AIAnalysisService, AnalysisContext  # type: ignore
+                        svc = AIAnalysisService()
+                        try:
+                            cfg = self.open_ai_analysis_dialog.__self__._build_config_from_viewer()  # type: ignore[attr-defined]
+                        except Exception:
+                            cfg = None
+                        if cfg is not None:
+                            try:
+                                svc.apply_config(cfg)
+                            except Exception:
+                                pass
+                        ctx = AnalysisContext()
+                        for p in paths:
+                            try:
+                                svc.analyze(p, context=ctx, progress_cb=None, is_cancelled=lambda: False)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                try:
+                    Thread(target=_prefetch_ai, args=(head,), daemon=True).start()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return res
 
     def _rescan_current_dir(self):

@@ -102,13 +102,15 @@ class GeocodingService:
     def is_korea_coordinate(self, latitude: float, longitude: float) -> bool:
         return (33.0 <= float(latitude) <= 38.6) and (124.0 <= float(longitude) <= 132.0)
 
-    def get_address_from_coordinates(self, latitude: float, longitude: float) -> Optional[Dict]:
+    def get_address_from_coordinates(self, latitude: float, longitude: float, language: str | None = None) -> Optional[Dict]:
         try:
             if requests is None:
                 return None
             if self.is_korea_coordinate(latitude, longitude):
                 return self._get_korea_address(latitude, longitude)
-            return self._get_international_address(latitude, longitude)
+            # 국제 주소: 언어 코드 전달(기본 ko)
+            lang = (language or "ko").strip() or "ko"
+            return self._get_international_address(latitude, longitude, language=lang)
         except Exception:
             return None
 
@@ -147,12 +149,12 @@ class GeocodingService:
         except Exception:
             return None
 
-    def _get_international_address(self, latitude: float, longitude: float) -> Optional[Dict]:
+    def _get_international_address(self, latitude: float, longitude: float, language: str = "ko") -> Optional[Dict]:
         if not self.google_api_key or requests is None:
             return None
         try:
             url = "https://maps.googleapis.com/maps/api/geocode/json"
-            params = {"latlng": f"{latitude},{longitude}", "key": self.google_api_key, "language": "ko"}
+            params = {"latlng": f"{latitude},{longitude}", "key": self.google_api_key, "language": str(language or "ko")}
             resp = requests.get(url, params=params, timeout=8)
             resp.raise_for_status()
             data = resp.json()

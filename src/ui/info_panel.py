@@ -161,15 +161,22 @@ def update_info_panel(owner) -> None:
         lat = exif_raw.get("lat") if isinstance(exif_raw, dict) else None  # type: ignore[name-defined]
         lon = exif_raw.get("lon") if isinstance(exif_raw, dict) else None  # type: ignore[name-defined]
         if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-            try:
-                from ..services.geocoding import geocoding_service  # type: ignore
-                addr = geocoding_service.get_address_from_coordinates(float(lat), float(lon))
-                if addr and isinstance(addr, dict):
-                    address_text = str(addr.get("formatted") or addr.get("full_address") or "")
-            except Exception:
-                address_text = None
+            # 프라이버시 보호: 위치 숨김이면 역지오코딩/지도 비활성화
+            if not bool(getattr(owner, "_privacy_hide_location", False)):
+                try:
+                    from ..services.geocoding import geocoding_service  # type: ignore
+                    # 언어: 뷰어 설정(없으면 ko)
+                    try:
+                        _lang = str(getattr(owner, "_ai_language", "ko") or "ko")
+                    except Exception:
+                        _lang = "ko"
+                    addr = geocoding_service.get_address_from_coordinates(float(lat), float(lon), language=_lang)
+                    if addr and isinstance(addr, dict):
+                        address_text = str(addr.get("formatted") or addr.get("full_address") or "")
+                except Exception:
+                    address_text = None
         if getattr(owner, "info_map_label", None) is not None:
-            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and owner.info_panel.isVisible():
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and owner.info_panel.isVisible() and not bool(getattr(owner, "_privacy_hide_location", False)):
                 try:
                     owner.info_map_label.setVisible(True)
                 except Exception:
