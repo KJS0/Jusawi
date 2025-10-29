@@ -10,36 +10,15 @@ except Exception:
 
 
 def _default_config_paths() -> list[str]:
+    # 최상단(실행 디렉터리) config.yaml만 사용
     paths: list[str] = []
-    # 1) 실행 디렉터리의 config.yaml
     try:
         exe_dir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
         p = os.path.join(exe_dir, "config.yaml")
         paths.append(p)
     except Exception:
         pass
-    # 2) 사용자 홈 디렉터리 하위
-    try:
-        home = os.path.expanduser("~")
-        paths.append(os.path.join(home, ".jusawi", "config.yaml"))
-        paths.append(os.path.join(home, "config.yaml"))
-    except Exception:
-        pass
-    # 3) 환경변수로 지정된 경로 최우선
-    env = os.getenv("JUSAWI_CONFIG")
-    if env:
-        paths.insert(0, env)
-    # 중복 제거, 존재하는 파일만 유지(로드 단계에서 다시 체크)
-    dedup: list[str] = []
-    seen: set[str] = set()
-    for p in paths:
-        if not p:
-            continue
-        ap = os.path.abspath(os.path.expanduser(p))
-        if ap not in seen:
-            seen.add(ap)
-            dedup.append(ap)
-    return dedup
+    return paths
 
 
 def _load_yaml_file(path: str) -> Dict[str, Any]:
@@ -120,16 +99,14 @@ def _ensure_user_config_exists() -> str | None:
 
 
 def _load_yaml_configs() -> Dict[str, Any]:
-    # config.yaml들을 우선순위 병합하여 읽어온다(존재 시)
-    merged: Dict[str, Any] = {}
+    # 최상단 config.yaml만 읽는다(병합 없음)
     try:
-        for p in _default_config_paths():
-            data = _load_yaml_file(p)
-            if data:
-                _merge_dict(merged, data)
+        paths = _default_config_paths()
+        if not paths:
+            return {}
+        return _load_yaml_file(paths[0])
     except Exception:
         return {}
-    return merged
 
 
 def _primary_config_path() -> str:
@@ -280,7 +257,7 @@ def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
             "exif_level": str(getattr(viewer, "_ai_exif_level", "full")),
             "retry_count": int(getattr(viewer, "_ai_retry_count", 2)),
             "retry_delay_ms": int(getattr(viewer, "_ai_retry_delay_ms", 800)),
-            "openai_api_key": _encrypt_str(str(getattr(viewer, "_ai_openai_api_key", ""))),
+            "openai_api_key": str(getattr(viewer, "_ai_openai_api_key", "")),
             "http_timeout_s": float(getattr(getattr(viewer, "_ai_cfg", None), "http_timeout_s", 120.0) if hasattr(viewer, "_ai_cfg") else 120.0),
             # 확장 설정
             "conf_threshold_pct": int(getattr(viewer, "_ai_conf_threshold_pct", 80)),
@@ -295,6 +272,37 @@ def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
             "bg_index_max": int(getattr(viewer, "_bg_index_max", 200)),
             "privacy_hide_location": bool(getattr(viewer, "_privacy_hide_location", False)),
             "offline_mode": bool(getattr(viewer, "_offline_mode", False)),
+        }
+        # map/info
+        cfg["map"] = {
+            "static_provider": str(getattr(viewer, "_map_static_provider", "auto")),
+            "preview_size": str(getattr(viewer, "_info_map_size_mode", "medium")),
+            "default_zoom": int(getattr(viewer, "_info_map_default_zoom", 12)),
+            "cache_max_mb": int(getattr(viewer, "_map_cache_max_mb", 128)),
+            "cache_max_days": int(getattr(viewer, "_map_cache_max_days", 30)),
+            "api_keys": {
+                "kakao": str(getattr(viewer, "_map_kakao_api_key", "")),
+                "google": str(getattr(viewer, "_map_google_api_key", "")),
+            },
+        }
+        # info summary
+        cfg["info"] = {
+            "show": {
+                "dt": bool(getattr(viewer, "_info_show_dt", True)),
+                "file": bool(getattr(viewer, "_info_show_file", True)),
+                "dir": bool(getattr(viewer, "_info_show_dir", True)),
+                "cam": bool(getattr(viewer, "_info_show_cam", True)),
+                "size": bool(getattr(viewer, "_info_show_size", True)),
+                "res": bool(getattr(viewer, "_info_show_res", True)),
+                "mp": bool(getattr(viewer, "_info_show_mp", True)),
+                "iso": bool(getattr(viewer, "_info_show_iso", True)),
+                "focal": bool(getattr(viewer, "_info_show_focal", True)),
+                "aperture": bool(getattr(viewer, "_info_show_aperture", True)),
+                "shutter": bool(getattr(viewer, "_info_show_shutter", True)),
+                "gps": bool(getattr(viewer, "_info_show_gps", True)),
+            },
+            "max_lines": int(getattr(viewer, "_info_max_lines", 50)),
+            "shutter_unit": str(getattr(viewer, "_info_shutter_unit", "auto")),  # auto|sec|frac
         }
     except Exception:
         pass
@@ -460,13 +468,83 @@ def _apply_yaml_settings(viewer, cfg: Dict[str, Any]) -> None:
                         cfg.http_timeout_s = float(ai.get("http_timeout_s"))
             except Exception:
                 pass
+        # Map/Info 설정
+        try:
+            mp = cfg.get("map", {}) if isinstance(cfg, dict) else {}
+        except Exception:
+            mp = {}
+        if isinstance(mp, dict):
+            try:
+                prov = str(mp.get("static_provider", "auto"))
+                viewer._map_static_provider = prov
+            except Exception:
+                pass
+        # Info 요약 설정
+        try:
+            info = cfg.get("info", {}) if isinstance(cfg, dict) else {}
+        except Exception:
+            info = {}
+        if isinstance(info, dict):
+            show = info.get("show", {}) if isinstance(info.get("show"), dict) else {}
+            try:
+                viewer._info_show_dt = bool(show.get("dt", True))
+                viewer._info_show_file = bool(show.get("file", True))
+                viewer._info_show_dir = bool(show.get("dir", True))
+                viewer._info_show_cam = bool(show.get("cam", True))
+                viewer._info_show_size = bool(show.get("size", True))
+                viewer._info_show_res = bool(show.get("res", True))
+                viewer._info_show_mp = bool(show.get("mp", True))
+                viewer._info_show_iso = bool(show.get("iso", True))
+                viewer._info_show_focal = bool(show.get("focal", True))
+                viewer._info_show_aperture = bool(show.get("aperture", True))
+                viewer._info_show_shutter = bool(show.get("shutter", True))
+                viewer._info_show_gps = bool(show.get("gps", True))
+            except Exception:
+                pass
+            try:
+                viewer._info_max_lines = int(info.get("max_lines", 50))
+            except Exception:
+                pass
+            try:
+                unit = str(info.get("shutter_unit", "auto") or "auto").lower()
+                if unit not in ("auto", "sec", "frac"):
+                    unit = "auto"
+                viewer._info_shutter_unit = unit
+            except Exception:
+                pass
+            try:
+                size = str(mp.get("preview_size", "medium"))
+                viewer._info_map_size_mode = size
+            except Exception:
+                pass
+            try:
+                viewer._info_map_default_zoom = int(mp.get("default_zoom", 12))
+            except Exception:
+                pass
+            try:
+                viewer._map_cache_max_mb = int(mp.get("cache_max_mb", 128))
+                viewer._map_cache_max_days = int(mp.get("cache_max_days", 30))
+            except Exception:
+                pass
+            try:
+                ak = mp.get("api_keys", {}) if isinstance(mp.get("api_keys"), dict) else {}
+                viewer._map_kakao_api_key = str(ak.get("kakao", getattr(viewer, "_map_kakao_api_key", "")))
+                viewer._map_google_api_key = str(ak.get("google", getattr(viewer, "_map_google_api_key", "")))
+            except Exception:
+                pass
     except Exception:
         pass
 
 
 def load_settings(viewer) -> None:
     try:
-        # config.yaml 사전 로드(나중에 QSettings 로드 후 최종적으로 덮어쓰기)
+        # QSettings에 저장된 OpenAI Key 제거(레지스트리 의존 제거)
+        try:
+            if hasattr(viewer, "settings"):
+                viewer.settings.remove("ai/openai_api_key")
+        except Exception:
+            pass
+        # config.yaml 사전 로드(최상단만)
         try:
             _cfg_yaml_cached = _load_yaml_configs()
         except Exception:
@@ -795,14 +873,11 @@ def load_settings(viewer) -> None:
             viewer._ai_retry_delay_ms = int(viewer.settings.value("ai/retry_delay_ms", 800))
         except Exception:
             viewer._ai_retry_delay_ms = 800
+        # OpenAI Key는 QSettings를 무시하고 YAML만 사용
         try:
-            _raw_key = str(viewer.settings.value("ai/openai_api_key", "", str))
+            pass
         except Exception:
-            _raw_key = ""
-        try:
-            viewer._ai_openai_api_key = _decrypt_str(_raw_key)
-        except Exception:
-            viewer._ai_openai_api_key = _raw_key
+            pass
         # 확장 로드(QSettings)
         try:
             viewer._ai_conf_threshold_pct = int(viewer.settings.value("ai/conf_threshold_pct", 80))
@@ -998,6 +1073,71 @@ def load_settings(viewer) -> None:
                 _apply_yaml_settings(viewer, _cfg_yaml_cached)
         except Exception:
             pass
+        # Info 요약(QSettings)
+        try:
+            viewer._info_show_dt = bool(viewer.settings.value("info/show_dt", getattr(viewer, "_info_show_dt", True), bool))
+            viewer._info_show_file = bool(viewer.settings.value("info/show_file", getattr(viewer, "_info_show_file", True), bool))
+            viewer._info_show_dir = bool(viewer.settings.value("info/show_dir", getattr(viewer, "_info_show_dir", True), bool))
+            viewer._info_show_cam = bool(viewer.settings.value("info/show_cam", getattr(viewer, "_info_show_cam", True), bool))
+            viewer._info_show_size = bool(viewer.settings.value("info/show_size", getattr(viewer, "_info_show_size", True), bool))
+            viewer._info_show_res = bool(viewer.settings.value("info/show_res", getattr(viewer, "_info_show_res", True), bool))
+            viewer._info_show_mp = bool(viewer.settings.value("info/show_mp", getattr(viewer, "_info_show_mp", True), bool))
+            viewer._info_show_iso = bool(viewer.settings.value("info/show_iso", getattr(viewer, "_info_show_iso", True), bool))
+            viewer._info_show_focal = bool(viewer.settings.value("info/show_focal", getattr(viewer, "_info_show_focal", True), bool))
+            viewer._info_show_aperture = bool(viewer.settings.value("info/show_aperture", getattr(viewer, "_info_show_aperture", True), bool))
+            viewer._info_show_shutter = bool(viewer.settings.value("info/show_shutter", getattr(viewer, "_info_show_shutter", True), bool))
+            viewer._info_show_gps = bool(viewer.settings.value("info/show_gps", getattr(viewer, "_info_show_gps", True), bool))
+            viewer._info_max_lines = int(viewer.settings.value("info/max_lines", getattr(viewer, "_info_max_lines", 50)))
+            viewer._info_shutter_unit = str(viewer.settings.value("info/shutter_unit", getattr(viewer, "_info_shutter_unit", "auto"), str))
+        except Exception:
+            pass
+        # Map/Info: QSettings → 뷰어/환경 반영
+        try:
+            viewer._map_static_provider = str(viewer.settings.value("map/static_provider", getattr(viewer, "_map_static_provider", "auto"), str))
+        except Exception:
+            viewer._map_static_provider = getattr(viewer, "_map_static_provider", "auto")
+        try:
+            viewer._info_map_size_mode = str(viewer.settings.value("map/preview_size", getattr(viewer, "_info_map_size_mode", "medium"), str))
+        except Exception:
+            viewer._info_map_size_mode = getattr(viewer, "_info_map_size_mode", "medium")
+        try:
+            viewer._info_map_default_zoom = int(viewer.settings.value("map/default_zoom", getattr(viewer, "_info_map_default_zoom", 12)))
+        except Exception:
+            viewer._info_map_default_zoom = getattr(viewer, "_info_map_default_zoom", 12)
+        try:
+            viewer._map_cache_max_mb = int(viewer.settings.value("map/cache_max_mb", getattr(viewer, "_map_cache_max_mb", 128)))
+        except Exception:
+            viewer._map_cache_max_mb = getattr(viewer, "_map_cache_max_mb", 128)
+        try:
+            viewer._map_cache_max_days = int(viewer.settings.value("map/cache_max_days", getattr(viewer, "_map_cache_max_days", 30)))
+        except Exception:
+            viewer._map_cache_max_days = getattr(viewer, "_map_cache_max_days", 30)
+        # API 키(QSettings; 평문 저장)
+        try:
+            viewer._map_kakao_api_key = str(viewer.settings.value("map/kakao_api_key", "", str))
+        except Exception:
+            viewer._map_kakao_api_key = ""
+        try:
+            viewer._map_google_api_key = str(viewer.settings.value("map/google_api_key", "", str))
+        except Exception:
+            viewer._map_google_api_key = ""
+        # 지도 API 키(config.yaml에서 우선)
+        try:
+            mp = _load_yaml_configs().get("map", {}) if isinstance(_load_yaml_configs(), dict) else {}
+        except Exception:
+            mp = {}
+        try:
+            ak = mp.get("api_keys", {}) if isinstance(mp.get("api_keys"), dict) else {}
+        except Exception:
+            ak = {}
+        try:
+            viewer._map_kakao_api_key = str(ak.get("kakao", str(getattr(viewer, "_map_kakao_api_key", ""))))
+        except Exception:
+            viewer._map_kakao_api_key = str(getattr(viewer, "_map_kakao_api_key", ""))
+        try:
+            viewer._map_google_api_key = str(ak.get("google", str(getattr(viewer, "_map_google_api_key", ""))))
+        except Exception:
+            viewer._map_google_api_key = str(getattr(viewer, "_map_google_api_key", ""))
     except Exception:
         viewer.recent_files = []
         viewer.recent_folders = []
@@ -1128,7 +1268,31 @@ def save_settings(viewer) -> None:
         viewer.settings.setValue("ai/exif_level", str(getattr(viewer, "_ai_exif_level", "full")))
         viewer.settings.setValue("ai/retry_count", int(getattr(viewer, "_ai_retry_count", 2)))
         viewer.settings.setValue("ai/retry_delay_ms", int(getattr(viewer, "_ai_retry_delay_ms", 800)))
-        viewer.settings.setValue("ai/openai_api_key", _encrypt_str(str(getattr(viewer, "_ai_openai_api_key", ""))))
+        # OpenAI Key는 QSettings에 저장하지 않음(최상단 config.yaml만 사용)
+        # Map/Info 저장
+        viewer.settings.setValue("map/static_provider", str(getattr(viewer, "_map_static_provider", "auto")))
+        viewer.settings.setValue("map/preview_size", str(getattr(viewer, "_info_map_size_mode", "medium")))
+        viewer.settings.setValue("map/default_zoom", int(getattr(viewer, "_info_map_default_zoom", 12)))
+        viewer.settings.setValue("map/cache_max_mb", int(getattr(viewer, "_map_cache_max_mb", 128)))
+        viewer.settings.setValue("map/cache_max_days", int(getattr(viewer, "_map_cache_max_days", 30)))
+        # API 키(QSettings; 평문 저장)
+        viewer.settings.setValue("map/kakao_api_key", str(getattr(viewer, "_map_kakao_api_key", "")))
+        viewer.settings.setValue("map/google_api_key", str(getattr(viewer, "_map_google_api_key", "")))
+        # Info 요약 저장
+        viewer.settings.setValue("info/show_dt", bool(getattr(viewer, "_info_show_dt", True)))
+        viewer.settings.setValue("info/show_file", bool(getattr(viewer, "_info_show_file", True)))
+        viewer.settings.setValue("info/show_dir", bool(getattr(viewer, "_info_show_dir", True)))
+        viewer.settings.setValue("info/show_cam", bool(getattr(viewer, "_info_show_cam", True)))
+        viewer.settings.setValue("info/show_size", bool(getattr(viewer, "_info_show_size", True)))
+        viewer.settings.setValue("info/show_res", bool(getattr(viewer, "_info_show_res", True)))
+        viewer.settings.setValue("info/show_mp", bool(getattr(viewer, "_info_show_mp", True)))
+        viewer.settings.setValue("info/show_iso", bool(getattr(viewer, "_info_show_iso", True)))
+        viewer.settings.setValue("info/show_focal", bool(getattr(viewer, "_info_show_focal", True)))
+        viewer.settings.setValue("info/show_aperture", bool(getattr(viewer, "_info_show_aperture", True)))
+        viewer.settings.setValue("info/show_shutter", bool(getattr(viewer, "_info_show_shutter", True)))
+        viewer.settings.setValue("info/show_gps", bool(getattr(viewer, "_info_show_gps", True)))
+        viewer.settings.setValue("info/max_lines", int(getattr(viewer, "_info_max_lines", 50)))
+        viewer.settings.setValue("info/shutter_unit", str(getattr(viewer, "_info_shutter_unit", "auto")))
         # 즉시 환경변수 반영(프로세스 범위)
         try:
             if bool(getattr(viewer, "_offline_mode", False)):

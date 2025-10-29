@@ -36,6 +36,101 @@ def setup_info_panel(owner) -> None:
     except Exception:
         pass
 
+    # 지도 라벨 포커스/휠/키 입력 처리(확대/축소)
+    try:
+        from PyQt6.QtCore import QObject, QEvent, Qt  # type: ignore[import]
+
+        class _MapEventFilter(QObject):
+            def eventFilter(self, _obj, event):
+                try:
+                    et = event.type()
+                except Exception:
+                    return False
+                # Ctrl+휠로 줌 변경
+                try:
+                    if et == QEvent.Type.Wheel:
+                        try:
+                            mods = int(event.modifiers())
+                        except Exception:
+                            mods = 0
+                        if (mods & int(Qt.KeyboardModifier.ControlModifier)) == 0:
+                            return False
+                        dy = event.angleDelta().y() if hasattr(event, 'angleDelta') else 0
+                        step = 1 if dy > 0 else (-1 if dy < 0 else 0)
+                        if step != 0:
+                            _bump_map_zoom(owner, step)
+                            return True
+                        return False
+                    # 지도 라벨 포커스/호버 상태에서 + / - 키로 줌 변경
+                    if et == QEvent.Type.KeyPress:
+                        try:
+                            key = int(event.key())
+                        except Exception:
+                            key = 0
+                        # 호버 또는 포커스 중일 때만 처리
+                        hovered = False
+                        try:
+                            pos = owner.mapFromGlobal(owner.cursor().pos())
+                            hovered = owner.info_map_label.geometry().contains(pos)
+                        except Exception:
+                            hovered = False
+                        if not (hovered or owner.info_map_label.hasFocus()):
+                            return False
+                        from PyQt6.QtCore import Qt as _Qt  # type: ignore
+                        if key in (ord('+'), _Qt.Key.Key_Plus, _Qt.Key.Key_Equal):
+                            _bump_map_zoom(owner, +1)
+                            return True
+                        if key in (ord('-'), _Qt.Key.Key_Minus, _Qt.Key.Key_Underscore):
+                            _bump_map_zoom(owner, -1)
+                            return True
+                        return False
+                except Exception:
+                    return False
+                return False
+
+        # 내부 헬퍼: 줌 변경 및 재요청
+        def _bump_map_zoom(_owner, delta: int) -> None:
+            try:
+                z = int(getattr(_owner, "_info_map_zoom", 0) or 0)
+                if z <= 0:
+                    try:
+                        z = int(getattr(_owner, "_info_map_default_zoom", 12) or 12)
+                    except Exception:
+                        z = 12
+                z = max(1, min(20, z + int(delta)))
+                _owner._info_map_zoom = z
+            except Exception:
+                pass
+            # 현재 좌표로 재요청
+            try:
+                lat = lon = None
+                if hasattr(_owner, "_pending_map"):
+                    try:
+                        lat, lon = float(_owner._pending_map[0]), float(_owner._pending_map[1])
+                    except Exception:
+                        lat = lon = None
+                if lat is None or lon is None:
+                    return
+                w = int(getattr(_owner.info_map_label, 'width', lambda: 600)())
+                h = int(getattr(_owner.info_map_label, 'height', lambda: 360)())
+                schedule_map_fetch(_owner, float(lat), float(lon), int(max(64, w)), int(max(64, h)), int(getattr(_owner, "_info_map_zoom", z)))
+            except Exception:
+                pass
+
+        if getattr(owner, "info_map_label", None) is not None:
+            try:
+                owner.info_map_label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            except Exception:
+                pass
+            _f = _MapEventFilter(owner)
+            try:
+                owner.info_map_label.installEventFilter(_f)
+                owner._map_event_filter = _f  # 보관(수명 유지)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 
 def toggle_info_panel(owner) -> None:
     try:
@@ -181,7 +276,24 @@ def update_info_panel(owner) -> None:
                     owner.info_map_label.setVisible(True)
                 except Exception:
                     pass
-                schedule_map_fetch(owner, float(lat), float(lon), 600, 360, 12)
+                # 초기 줌/크기 적용
+                try:
+                    if not hasattr(owner, "_info_map_zoom") or int(getattr(owner, "_info_map_zoom", 0) or 0) <= 0:
+                        owner._info_map_zoom = int(getattr(owner, "_info_map_default_zoom", 12) or 12)
+                except Exception:
+                    owner._info_map_zoom = 12
+                # 라벨 크기에 맞춰 요청
+                try:
+                    w = int(owner.info_map_label.width())
+                    h = int(owner.info_map_label.height())
+                except Exception:
+                    w, h = 600, 360
+                schedule_map_fetch(owner, float(lat), float(lon), int(max(64, w)), int(max(64, h)), int(getattr(owner, "_info_map_zoom", 12)))
+                # 외부 지도 링크 툴팁 설정
+                try:
+                    owner.info_map_label.setToolTip(f"https://maps.google.com/?q={float(lat)},{float(lon)}")
+                except Exception:
+                    pass
             else:
                 try:
                     owner.info_map_label.setVisible(False)
@@ -226,6 +338,75 @@ def update_info_panel(owner) -> None:
                 lines.append(f"{address_text}")
             if lines:
                 summary_text = "\n".join(lines)
+    except Exception:
+        pass
+
+    # 요약 표시 항목/표기 옵션 적용
+    try:
+        # 표시 항목 구성
+        show_map = {
+            "촬영 날짜 및 시간:": bool(getattr(owner, "_info_show_dt", True)),
+            "파일명:": bool(getattr(owner, "_info_show_file", True)),
+            "디렉토리명:": bool(getattr(owner, "_info_show_dir", True)),
+            "촬영 기기:": bool(getattr(owner, "_info_show_cam", True)),
+            "용량:": bool(getattr(owner, "_info_show_size", True)),
+            "해상도:": bool(getattr(owner, "_info_show_res", True)),
+            "화소수:": bool(getattr(owner, "_info_show_mp", True)),
+            "ISO:": bool(getattr(owner, "_info_show_iso", True)),
+            "초점 거리:": bool(getattr(owner, "_info_show_focal", True)),
+            "조리개값:": bool(getattr(owner, "_info_show_aperture", True)),
+            "셔터속도:": bool(getattr(owner, "_info_show_shutter", True)),
+            "GPS 위도, 경도:": bool(getattr(owner, "_info_show_gps", True)),
+        }
+        # 줄 필터링 및 셔터 단위 변환
+        unit = str(getattr(owner, "_info_shutter_unit", "auto") or "auto")
+        new_lines: list[str] = []
+        for ln in (summary_text or "").splitlines():
+            try:
+                key = ln.split(' ', 1)[0] + (':' if ':' not in ln.split(' ', 1)[0] else '')
+            except Exception:
+                key = ln[:ln.find(':')+1] if ':' in ln else ln
+            # 표시 여부
+            keep = True
+            for prefix, enabled in show_map.items():
+                if ln.strip().startswith(prefix):
+                    keep = bool(enabled)
+                    break
+            if not keep:
+                continue
+            # 셔터 표기 강제 변환
+            if unit in ("sec", "frac") and ln.strip().startswith("셔터속도:"):
+                try:
+                    # exif_raw에서 초 단위 값 사용
+                    sec = None
+                    try:
+                        sec = float(exif_raw.get('exposure_time')) if isinstance(exif_raw, dict) and exif_raw.get('exposure_time') is not None else None
+                    except Exception:
+                        sec = None
+                    if sec and sec > 0:
+                        if unit == 'sec':
+                            if abs(sec - round(sec)) < 1e-3:
+                                sh_txt = f"{int(round(sec))}s"
+                            else:
+                                sh_txt = f"{sec:.1f}s"
+                        else:
+                            if sec >= 1.0:
+                                sh_txt = f"{int(round(sec))}s"
+                            else:
+                                den = max(1, round(1.0 / sec))
+                                sh_txt = f"1/{den}s"
+                        ln = "셔터속도: " + sh_txt
+                except Exception:
+                    pass
+            new_lines.append(ln)
+        # 줄 수 제한 적용
+        try:
+            max_lines = int(getattr(owner, "_info_max_lines", 50) or 50)
+        except Exception:
+            max_lines = 50
+        if max_lines > 0 and len(new_lines) > max_lines:
+            new_lines = new_lines[:max_lines]
+        summary_text = "\n".join(new_lines)
     except Exception:
         pass
 
@@ -277,10 +458,19 @@ def on_map_ready(owner, token: int, pm) -> None:
 
 def update_info_panel_sizes(owner) -> None:
     try:
-        # 스플리터 롤백: 정보 패널 폭을 고정(창 너비 비례)하여 이미지 영역이 지나치게 줄지 않도록 함
-        total_w = max(640, int(owner.width()))
-        panel_w = max(360, int(total_w * 0.42))
-        panel_h = int(panel_w * 0.61)
+        # 정보 패널 폭은 기존 규칙 유지
+        # 고정 소형 폭으로 유지하여 설정 적용 후에도 커지지 않도록 함
+        try:
+            panel_w = int(getattr(owner, "_info_panel_fixed_width", 320) or 320)
+        except Exception:
+            panel_w = 320
+        # 지도 미리보기는 텍스트 에리어 폭에 맞추되, 높이를 작게 고정
+        # 높이: 패널 폭의 0.35배, 최소 120px, 최대 200px
+        panel_h = int(panel_w * 0.35)
+        if panel_h < 120:
+            panel_h = 120
+        if panel_h > 200:
+            panel_h = 200
         if getattr(owner, "info_map_label", None) is not None:
             try:
                 owner.info_map_label.setFixedSize(panel_w, panel_h)
@@ -288,7 +478,7 @@ def update_info_panel_sizes(owner) -> None:
                 pass
         if getattr(owner, "info_text", None) is not None:
             try:
-                scaled = max(16, min(24, int(total_w / 80)))
+                scaled = 16
                 owner.info_text.setFixedWidth(panel_w)
                 owner.info_text.setStyleSheet(f"QTextEdit {{ color: #EAEAEA; background-color: #2B2B2B; border: 1px solid #444; font-size: {scaled}px; line-height: 140%; }}")
             except Exception:

@@ -75,6 +75,9 @@ COMMANDS: List[Command] = [
     # 색상 보기 A/B 토글 (원본 vs sRGB/타깃 변환)
     Command("toggle_color_ab", "원본/sRGB 보기 토글", "색상 보기 A/B 전환", "보기", "toggle_color_ab", ["C"]),
 
+    # 정보/패널
+    Command("toggle_info_panel", "정보 패널 토글", "우측 정보 패널 표시/숨김", "보기", "toggle_info_panel", ["I", "Ctrl+I"]),
+
     # 도움말(F1)은 고정
     Command("help_shortcuts", "단축키 도움말", "현재 단축키 표시", "도움말", "open_shortcuts_help", ["F1"], lock_key=True),
     # Natural language search
@@ -83,7 +86,10 @@ COMMANDS: List[Command] = [
     # AI 분석
     Command("open_ai_analysis", "AI 분석 실행", "현재 사진 분석", "AI", "open_ai_analysis_dialog", ["Ctrl+Shift+A"]),
     Command("chain_ai_analysis", "연쇄 AI 분석 토글", "현재→다음 반복 분석 시작/중지", "AI", "toggle_chain_ai_analysis", ["Ctrl+Alt+A"]),
-    Command("toggle_ai_language", "AI 언어 전환", "분석 언어 한국어/영어 토글", "AI", "toggle_ai_language", ["Ctrl+L"]),
+    Command("toggle_ai_language", "AI 언어 전환", "분석 언어 한국어/영어 토글", "AI", "toggle_ai_language", ["Ctrl+Alt+L"]),
+
+    # 프라이버시/위치 표시 토글
+    Command("toggle_privacy_location", "위치 표시 토글", "정보 패널에서 주소/지도 표시 토글", "보기", "toggle_privacy_hide_location", ["Ctrl+L"]),
 
     # 최근 파일 빠른 실행 (Alt+1..9)
     Command("open_recent_1", "최근 파일 1", "최근 파일 1 열기", "파일", "_open_recent_1", ["Alt+1"]),

@@ -6,7 +6,6 @@ GPS 좌표를 주소로 변환하는 Geocoding 모듈
 해외: Google Maps Geocoding API 사용
 """
 
-import os
 import logging
 from typing import Optional, Dict
 
@@ -15,19 +14,9 @@ try:
 except Exception:
     requests = None  # type: ignore
 
-try:
-    from dotenv import load_dotenv  # type: ignore
-except Exception:
-    def load_dotenv() -> None:  # type: ignore
-        pass
-
 logger = logging.getLogger(__name__)
 
-# 환경 변수 로드(있으면 사용)
-try:
-    load_dotenv()
-except Exception:
-    pass
+from ..storage.settings_store import _load_yaml_configs  # type: ignore
 
 PROVINCE_MAPPING = {
     '서울특별시': '서울특별시',  # 2024 개정명칭 대응(없으면 원본 유지)
@@ -92,18 +81,41 @@ def standardize_province_name(address: str) -> str:
 
 class GeocodingService:
     def __init__(self):
-        self.kakao_api_key = os.getenv('KAKAO_REST_API_KEY')
-        self.google_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+        cfg = {}
+        try:
+            cfg = _load_yaml_configs().get('map', {})  # type: ignore
+        except Exception:
+            cfg = {}
+        ak = cfg.get('api_keys', {}) if isinstance(cfg.get('api_keys'), dict) else {}
+        self.kakao_api_key = str(ak.get('kakao', '') or '')
+        self.google_api_key = str(ak.get('google', '') or '')
         if not self.kakao_api_key:
-            logger.info("Kakao API 키 미설정 — 한국 주소 변환 비활성화")
+            logger.info("Kakao API 키 없음 — 한국 주소 변환 비활성화")
         if not self.google_api_key:
-            logger.info("Google Maps API 키 미설정 — 해외 주소 변환 비활성화")
+            logger.info("Google Maps API 키 없음 — 해외 주소 변환 비활성화")
+
+    def _refresh_api_keys(self) -> None:
+        try:
+            cfg = _load_yaml_configs().get('map', {})  # type: ignore
+        except Exception:
+            cfg = {}
+        ak = cfg.get('api_keys', {}) if isinstance(cfg.get('api_keys'), dict) else {}
+        try:
+            self.kakao_api_key = str(ak.get('kakao', self.kakao_api_key) or self.kakao_api_key)
+        except Exception:
+            pass
+        try:
+            self.google_api_key = str(ak.get('google', self.google_api_key) or self.google_api_key)
+        except Exception:
+            pass
 
     def is_korea_coordinate(self, latitude: float, longitude: float) -> bool:
         return (33.0 <= float(latitude) <= 38.6) and (124.0 <= float(longitude) <= 132.0)
 
     def get_address_from_coordinates(self, latitude: float, longitude: float, language: str | None = None) -> Optional[Dict]:
         try:
+            # 최신 키 반영
+            self._refresh_api_keys()
             if requests is None:
                 return None
             if self.is_korea_coordinate(latitude, longitude):
@@ -176,19 +188,20 @@ class GeocodingService:
             return None
 
 
-# 전역 인스턴스
+"""전역 인스턴스"""
 geocoding_service = GeocodingService()
 
 
-def get_google_static_map_png(latitude: float, longitude: float, width: int = 640, height: int = 400, zoom: int = 15) -> Optional[bytes]:
-    """Google Static Maps PNG 바이트를 반환. 키 없거나 실패 시 None.
-
-    주의: Google Cloud에서 Static Maps API가 활성화되어 있어야 합니다.
-    """
+def _get_google_static_map_png(latitude: float, longitude: float, width: int = 640, height: int = 400, zoom: int = 15) -> Optional[bytes]:
     try:
         if requests is None:
             return None
-        api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+        # config.yaml에서 키 로드
+        try:
+            ak = _load_yaml_configs().get('map', {}).get('api_keys', {})  # type: ignore
+        except Exception:
+            ak = {}
+        api_key = str(ak.get('google', '') or '')
         if not api_key:
             return None
         w = max(64, min(640, int(width)))
@@ -202,16 +215,83 @@ def get_google_static_map_png(latitude: float, longitude: float, width: int = 64
             "maptype": "roadmap",
             "markers": f"color:red|{float(latitude)},{float(longitude)}",
             "key": api_key,
-            "scale": "3",  # 고해상도 요청(가능 시)
+            "scale": "3",
         }
-        resp = requests.get(url, params=params, timeout=4)
+        resp = requests.get(url, params=params, timeout=5)
         if resp.status_code != 200:
             return None
-        ctype = resp.headers.get("Content-Type", "")
-        if "image" not in ctype:
+        if "image" not in (resp.headers.get("Content-Type", "") or ""):
             return None
         return resp.content
     except Exception:
         return None
+
+
+def _get_osm_static_map_png(latitude: float, longitude: float, width: int = 640, height: int = 400, zoom: int = 15) -> Optional[bytes]:
+    """OSM 공개 정적 지도 서비스 사용(키 불필요). 정책에 따라 트래픽을 과도하게 발생시키지 않도록 주의."""
+    try:
+        if requests is None:
+            return None
+        w = max(64, min(1024, int(width)))
+        h = max(64, min(1024, int(height)))
+        z = max(1, min(20, int(zoom)))
+        url = "https://staticmap.openstreetmap.de/staticmap.php"
+        params = {
+            "center": f"{float(latitude)},{float(longitude)}",
+            "zoom": str(z),
+            "size": f"{w}x{h}",
+            "markers": f"{float(latitude)},{float(longitude)},red-pushpin",
+        }
+        resp = requests.get(url, params=params, timeout=6)
+        if resp.status_code != 200:
+            return None
+        if "image" not in (resp.headers.get("Content-Type", "") or ""):
+            return None
+        return resp.content
+    except Exception:
+        return None
+
+
+def _get_kakao_static_map_png(latitude: float, longitude: float, width: int = 640, height: int = 400, zoom: int = 15) -> Optional[bytes]:
+    """Kakao Static Map REST API 사용. Kakao REST API 키 필요."""
+    try:
+        if requests is None:
+            return None
+        try:
+            ak = _load_yaml_configs().get('map', {}).get('api_keys', {})  # type: ignore
+        except Exception:
+            ak = {}
+        api_key = str(ak.get('kakao', '') or '')
+        if not api_key:
+            return None
+        w = max(64, min(1024, int(width)))
+        h = max(64, min(1024, int(height)))
+        # Kakao level: 1(가까움) ~ 14(멀어짐). Google/OSM(1~20)와 다르므로 대략 매핑
+        try:
+            level = int(max(1, min(14, round(21 - int(zoom)))))
+        except Exception:
+            level = 6
+        url = "https://dapi.kakao.com/v2/maps/staticmap"
+        params = {
+            "center": f"{float(longitude)},{float(latitude)}",
+            "level": str(level),
+            "w": str(w),
+            "h": str(h),
+            "markers": f"color:red|{float(longitude)},{float(latitude)}",
+        }
+        headers = {"Authorization": f"KakaoAK {api_key}"}
+        resp = requests.get(url, headers=headers, params=params, timeout=6)
+        if resp.status_code != 200:
+            return None
+        if "image" not in (resp.headers.get("Content-Type", "") or ""):
+            return None
+        return resp.content
+    except Exception:
+        return None
+
+
+def get_static_map_png(latitude: float, longitude: float, width: int = 640, height: int = 400, zoom: int = 15, provider: str | None = None) -> Optional[bytes]:
+    """정적 지도는 Google로 고정. 키가 없으면 None 반환."""
+    return _get_google_static_map_png(latitude, longitude, width, height, zoom)
 
 

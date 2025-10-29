@@ -110,6 +110,50 @@ class PerformanceSettingsPage(SettingsPage):
         form_pt.addRow("슬라이드쇼 시작 예열", self.spin_slideshow_prefetch)
         root.addLayout(form_pt)
 
+        # 정보/지도 설정
+        root.addWidget(QLabel("정보/지도", self))
+        # 정적 지도 제공자 선택 제거(항상 Google 사용)
+        self.combo_map_size = QComboBox(self)
+        self.combo_map_size.addItems(["작게", "보통", "크게"])  # small/medium/large
+        self.spin_map_default_zoom = QSpinBox(self); self.spin_map_default_zoom.setRange(1, 20); self.spin_map_default_zoom.setSuffix(" x")
+        self.spin_map_cache_max_mb = QSpinBox(self); self.spin_map_cache_max_mb.setRange(8, 4096); self.spin_map_cache_max_mb.setSuffix(" MB")
+        self.spin_map_cache_max_days = QSpinBox(self); self.spin_map_cache_max_days.setRange(1, 365); self.spin_map_cache_max_days.setSuffix(" 일")
+        from PyQt6.QtWidgets import QLineEdit as _QLineEditKeys  # type: ignore[import]
+        self.ed_kakao_key = _QLineEditKeys(self)
+        try:
+            self.ed_kakao_key.setEchoMode(_QLineEditKeys.EchoMode.Password)
+        except Exception:
+            pass
+        self.ed_kakao_key.setPlaceholderText("Kakao REST API Key")
+        self.ed_google_key = _QLineEditKeys(self)
+        try:
+            self.ed_google_key.setEchoMode(_QLineEditKeys.EchoMode.Password)
+        except Exception:
+            pass
+        self.ed_google_key.setPlaceholderText("Google Maps API Key")
+        from PyQt6.QtWidgets import QPushButton as _QPushButton2  # type: ignore[import]
+        self.btn_clear_map_cache = _QPushButton2("지도 캐시 비우기", self)
+        def _clear_map_cache():
+            try:
+                from ...services import map_cache as _map_cache  # type: ignore
+                _map_cache.clear_disk_cache()
+            except Exception:
+                pass
+        try:
+            self.btn_clear_map_cache.clicked.connect(_clear_map_cache)
+        except Exception:
+            pass
+        form_map = QFormLayout()
+        # 제공자 행 제거: Google 고정
+        form_map.addRow("미리보기 크기", self.combo_map_size)
+        form_map.addRow("기본 줌 레벨", self.spin_map_default_zoom)
+        form_map.addRow("캐시 최대 용량", self.spin_map_cache_max_mb)
+        form_map.addRow("캐시 보존 기간", self.spin_map_cache_max_days)
+        form_map.addRow("캐시 지우기", self.btn_clear_map_cache)
+        form_map.addRow("Kakao API Key", self.ed_kakao_key)
+        form_map.addRow("Google API Key", self.ed_google_key)
+        root.addLayout(form_map)
+
     def load_from_viewer(self, viewer: Any) -> None:  # noqa: ANN401
         try:
             self.chk_prefetch_thumbs.setChecked(bool(getattr(viewer, "_enable_thumb_prefetch", True)))
@@ -211,6 +255,37 @@ class PerformanceSettingsPage(SettingsPage):
             self.spin_slideshow_prefetch.setValue(int(getattr(viewer, "_slideshow_prefetch_count", 0)))
         except Exception:
             self.spin_slideshow_prefetch.setValue(0)
+        # 지도/정보
+        # 제공자 로드 제거: Google 고정
+        try:
+            size_mode = str(getattr(viewer, "_info_map_size_mode", "medium") or "medium")
+            self.combo_map_size.setCurrentIndex({"small":0, "medium":1, "large":2}.get(size_mode, 1))
+        except Exception:
+            self.combo_map_size.setCurrentIndex(1)
+        try:
+            self.spin_map_default_zoom.setValue(int(getattr(viewer, "_info_map_default_zoom", 12)))
+        except Exception:
+            self.spin_map_default_zoom.setValue(12)
+        try:
+            import os as _os
+            mb = int(getattr(viewer, "_map_cache_max_mb", int(_os.getenv('MAP_CACHE_MAX_MB', '128'))))
+        except Exception:
+            mb = 128
+        self.spin_map_cache_max_mb.setValue(max(8, mb))
+        try:
+            import os as _os
+            days = int(getattr(viewer, "_map_cache_max_days", int(_os.getenv('MAP_CACHE_MAX_DAYS', '30'))))
+        except Exception:
+            days = 30
+        self.spin_map_cache_max_days.setValue(max(1, days))
+        try:
+            self.ed_kakao_key.setText(str(getattr(viewer, "_map_kakao_api_key", "")) or "")
+        except Exception:
+            self.ed_kakao_key.setText("")
+        try:
+            self.ed_google_key.setText(str(getattr(viewer, "_map_google_api_key", "")) or "")
+        except Exception:
+            self.ed_google_key.setText("")
 
     def apply_to_viewer(self, viewer: Any) -> None:  # noqa: ANN401
         try:
@@ -305,6 +380,34 @@ class PerformanceSettingsPage(SettingsPage):
             viewer._slideshow_prefetch_count = int(self.spin_slideshow_prefetch.value())
         except Exception:
             pass
+        # 지도/정보 적용
+        # 제공자 적용 제거: Google 고정
+        try:
+            idx = int(self.combo_map_size.currentIndex())
+            viewer._info_map_size_mode = ("small" if idx == 0 else ("medium" if idx == 1 else "large"))
+        except Exception:
+            pass
+        try:
+            viewer._info_map_default_zoom = int(self.spin_map_default_zoom.value())
+            if not hasattr(viewer, "_info_map_zoom") or int(getattr(viewer, "_info_map_zoom", 0) or 0) <= 0:
+                viewer._info_map_zoom = int(viewer._info_map_default_zoom)
+        except Exception:
+            pass
+        try:
+            viewer._map_cache_max_mb = int(self.spin_map_cache_max_mb.value())
+            viewer._map_cache_max_days = int(self.spin_map_cache_max_days.value())
+            # 환경 변수에도 반영
+            import os as _os
+            _os.environ['MAP_CACHE_MAX_MB'] = str(max(8, int(viewer._map_cache_max_mb)))
+            _os.environ['MAP_CACHE_MAX_DAYS'] = str(max(1, int(viewer._map_cache_max_days)))
+            # 제공자는 Google 고정(환경변수 미사용)
+        except Exception:
+            pass
+        try:
+            viewer._map_kakao_api_key = str(self.ed_kakao_key.text()).strip()
+            viewer._map_google_api_key = str(self.ed_google_key.text()).strip()
+        except Exception:
+            pass
 
     def reset_to_defaults(self) -> None:
         try:
@@ -331,6 +434,26 @@ class PerformanceSettingsPage(SettingsPage):
             self.chk_preload_idle_only.setChecked(False)
             self.spin_prefetch_on_dir_enter.setValue(0)
             self.spin_slideshow_prefetch.setValue(0)
+            # 지도/정보 기본값
+            self.combo_map_provider.setCurrentIndex(0)
+            self.combo_map_size.setCurrentIndex(1)
+            self.spin_map_default_zoom.setValue(12)
+            self.spin_map_cache_max_mb.setValue(128)
+            self.spin_map_cache_max_days.setValue(30)
+            # 정보 요약 기본값
+            try:
+                for chk in [self.chk_info_dt, self.chk_info_file, self.chk_info_dir, self.chk_info_cam, self.chk_info_size, self.chk_info_res, self.chk_info_mp, self.chk_info_iso, self.chk_info_focal, self.chk_info_aperture, self.chk_info_shutter, self.chk_info_gps]:
+                    chk.setChecked(True)
+            except Exception:
+                pass
+            try:
+                self.spin_info_max_lines.setValue(50)
+            except Exception:
+                pass
+            try:
+                self.combo_shutter_unit.setCurrentIndex(0)
+            except Exception:
+                pass
         except Exception:
             pass
 

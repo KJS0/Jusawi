@@ -91,7 +91,7 @@ class AISettingsPage(SettingsPage):
         self.ed_ai_api_key = _QLineEditAI(self)
         try:
             from PyQt6.QtWidgets import QLineEdit as _QLE  # type: ignore[import]
-            self.ed_ai_api_key.setEchoMode(_QLE.EchoMode.Normal)
+            self.ed_ai_api_key.setEchoMode(_QLE.EchoMode.Password)
         except Exception:
             pass
         form_ai = QFormLayout()
@@ -179,7 +179,8 @@ class AISettingsPage(SettingsPage):
             form_adv.addRow("프라이버시", self.chk_privacy_hide_loc)
             form_adv.addRow("오프라인 모드", self.chk_offline_mode)
             form_adv.addRow("HTTP 타임아웃", self.spin_http_timeout)
-            root.addLayout(form_adv)
+            # 그룹박스 자체를 루트에 추가 (폼 레이아웃은 그룹박스의 레이아웃으로만 소유)
+            root.addWidget(gb_adv)
         except Exception:
             pass
 

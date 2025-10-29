@@ -43,8 +43,16 @@ class SettingsDialog(QDialog):
             gen_root.setSpacing(0)
         except Exception:
             pass
-        self.general_page = GeneralSettingsPage(self.general_tab)
-        gen_root.addWidget(self.general_page)
+        self.general_page = GeneralSettingsPage(None)
+        # 스크롤 영역으로 감싸기
+        try:
+            _sa = QScrollArea(self.general_tab)
+            _sa.setWidgetResizable(True)
+            _sa.setFrameShape(QScrollArea.Shape.NoFrame)
+            _sa.setWidget(self.general_page)
+            gen_root.addWidget(_sa)
+        except Exception:
+            gen_root.addWidget(self.general_page)
         # 기존 코드 호환을 위한 속성 매핑(외부 로직/필터 등록 재사용)
         for _name in [
             "chk_scan_after_open", "chk_remember_last_dir",
@@ -78,8 +86,15 @@ class SettingsDialog(QDialog):
             ai_layout.setSpacing(0)
         except Exception:
             pass
-        self.ai_page = AISettingsPage(self.ai_tab)
-        ai_layout.addWidget(self.ai_page)
+        self.ai_page = AISettingsPage(None)
+        try:
+            _sa2 = QScrollArea(self.ai_tab)
+            _sa2.setWidgetResizable(True)
+            _sa2.setFrameShape(QScrollArea.Shape.NoFrame)
+            _sa2.setWidget(self.ai_page)
+            ai_layout.addWidget(_sa2)
+        except Exception:
+            ai_layout.addWidget(self.ai_page)
         for _name in [
             "chk_ai_auto", "chk_ai_auto_drop", "chk_ai_auto_nav", "chk_ai_skip_cached",
             "spin_ai_delay", "combo_ai_language", "combo_ai_tone", "combo_ai_purpose",
@@ -102,8 +117,15 @@ class SettingsDialog(QDialog):
             perf_layout.setSpacing(0)
         except Exception:
             pass
-        self.perf_page = PerformanceSettingsPage(self.perf_tab)
-        perf_layout.addWidget(self.perf_page)
+        self.perf_page = PerformanceSettingsPage(None)
+        try:
+            _sa3 = QScrollArea(self.perf_tab)
+            _sa3.setWidgetResizable(True)
+            _sa3.setFrameShape(QScrollArea.Shape.NoFrame)
+            _sa3.setWidget(self.perf_page)
+            perf_layout.addWidget(_sa3)
+        except Exception:
+            perf_layout.addWidget(self.perf_page)
         for _name in [
             "chk_prefetch_thumbs", "spin_preload_radius", "chk_prefetch_map",
             "combo_preload_direction", "spin_preload_priority", "spin_preload_concurrency",
@@ -132,8 +154,15 @@ class SettingsDialog(QDialog):
             view_layout.setSpacing(0)
         except Exception:
             pass
-        self.view_page = ViewSettingsPage(self.view_tab)
-        view_layout.addWidget(self.view_page)
+        self.view_page = ViewSettingsPage(None)
+        try:
+            _sa4 = QScrollArea(self.view_tab)
+            _sa4.setWidgetResizable(True)
+            _sa4.setFrameShape(QScrollArea.Shape.NoFrame)
+            _sa4.setWidget(self.view_page)
+            view_layout.addWidget(_sa4)
+        except Exception:
+            view_layout.addWidget(self.view_page)
         for _name in [
             "combo_default_view", "spin_min_scale", "spin_max_scale", "chk_fixed_steps",
             "spin_zoom_step", "spin_precise_step", "chk_smooth", "spin_fit_margin",
@@ -154,8 +183,15 @@ class SettingsDialog(QDialog):
             color_layout.setSpacing(0)
         except Exception:
             pass
-        self.color_page = ColorSettingsPage(self.color_tab)
-        color_layout.addWidget(self.color_page)
+        self.color_page = ColorSettingsPage(None)
+        try:
+            _sa5 = QScrollArea(self.color_tab)
+            _sa5.setWidgetResizable(True)
+            _sa5.setFrameShape(QScrollArea.Shape.NoFrame)
+            _sa5.setWidget(self.color_page)
+            color_layout.addWidget(_sa5)
+        except Exception:
+            color_layout.addWidget(self.color_page)
         for _name in [
             "chk_icc_ignore", "combo_assumed", "combo_target", "combo_fallback",
             "chk_anim_convert", "chk_thumb_convert",
@@ -173,8 +209,15 @@ class SettingsDialog(QDialog):
             fs_layout.setSpacing(0)
         except Exception:
             pass
-        self.fullscreen_page = FullscreenSettingsPage(self.fullscreen_tab)
-        fs_layout.addWidget(self.fullscreen_page)
+        self.fullscreen_page = FullscreenSettingsPage(None)
+        try:
+            _sa6 = QScrollArea(self.fullscreen_tab)
+            _sa6.setWidgetResizable(True)
+            _sa6.setFrameShape(QScrollArea.Shape.NoFrame)
+            _sa6.setWidget(self.fullscreen_page)
+            fs_layout.addWidget(_sa6)
+        except Exception:
+            fs_layout.addWidget(self.fullscreen_page)
         for _name in [
             "spin_fs_auto_hide", "spin_cursor_hide", "combo_fs_viewmode",
             "chk_fs_show_filmstrip", "chk_fs_safe_exit", "chk_overlay_default",
@@ -544,7 +587,11 @@ class SettingsDialog(QDialog):
             # 기본 넉넉한 크기
             self.resize(max(860, self.width()), max(520, self.height()))
         else:
-            # 일반 탭: 컴팩트 크기 강제
+            # 일반 탭: 컴팩트 크기 강제(작게도 가능하도록 최소 크기 낮추기)
+            try:
+                self.setMinimumSize(420, 280)
+            except Exception:
+                pass
             self.resize(520, 360)
 
         # 자연 정렬 UI 규칙 동기화

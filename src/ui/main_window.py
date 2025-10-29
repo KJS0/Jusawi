@@ -1455,6 +1455,38 @@ class JusawiViewer(QMainWindow):
     def _update_info_panel_sizes(self):
         return info_panel.update_info_panel_sizes(self)
 
+    def toggle_privacy_hide_location(self) -> None:
+        """주소/지도 표시(위치 정보) 프라이버시 토글.
+
+        - _privacy_hide_location 값을 토글하고 즉시 저장/적용
+        - 정보 패널이 열려 있으면 즉시 갱신하여 주소/지도 표시 상태 반영
+        """
+        try:
+            cur = bool(getattr(self, "_privacy_hide_location", False))
+        except Exception:
+            cur = False
+        new_val = not cur
+        try:
+            self._privacy_hide_location = bool(new_val)
+        except Exception:
+            pass
+        # 저장 및 상태바 피드백
+        try:
+            self.save_settings()
+        except Exception:
+            pass
+        try:
+            msg = "위치 정보 숨김: 켬" if new_val else "위치 정보 숨김: 끔"
+            self.statusBar().showMessage(msg, 1500)
+        except Exception:
+            pass
+        # 정보 패널 즉시 갱신
+        try:
+            if getattr(self, "info_panel", None) is not None and self.info_panel.isVisible():
+                self.update_info_panel()
+        except Exception:
+            pass
+
     def scan_directory(self, dir_path):
         res = dir_scan_ext.scan_directory(self, dir_path)
         # 디렉터리 진입 예열

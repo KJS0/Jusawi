@@ -1,12 +1,29 @@
 from __future__ import annotations
 
-import os, hashlib, threading
-from typing import Optional
+import os, hashlib, threading, time
+from typing import Optional, Tuple
+from ..storage.settings_store import _load_yaml_configs  # type: ignore
 from PyQt6.QtCore import QObject, pyqtSignal, QRunnable, QThreadPool
 from PyQt6.QtGui import QPixmap
 
 _cache_mem: dict[str, QPixmap] = {}
 _lock = threading.Lock()
+
+# 디스크 캐시 정책(환경변수로 제어)
+def _get_limits() -> Tuple[int, int]:
+    try:
+        cfg = _load_yaml_configs().get('map', {})  # type: ignore
+    except Exception:
+        cfg = {}
+    try:
+        max_mb = int(cfg.get('cache_max_mb', 128))
+    except Exception:
+        max_mb = 128
+    try:
+        max_days = int(cfg.get('cache_max_days', 30))
+    except Exception:
+        max_days = 30
+    return max(8, max_mb), max(1, max_days)
 
 def _cache_dir() -> str:
     base = os.path.join(os.path.expanduser("~"), ".jusawi", "maps")
@@ -43,6 +60,62 @@ def put_cached(lat: float, lon: float, w: int, h: int, zoom: int, pm: QPixmap) -
         pm.save(p, "PNG")
     except Exception:
         pass
+    try:
+        _enforce_limits()
+    except Exception:
+        pass
+
+def _enforce_limits() -> None:
+    base = _cache_dir()
+    try:
+        max_mb, max_days = _get_limits()
+        now = time.time()
+        files = []
+        total = 0
+        for name in os.listdir(base):
+            if not name.endswith('.png'):
+                continue
+            fp = os.path.join(base, name)
+            try:
+                st = os.stat(fp)
+                age_days = (now - float(st.st_mtime)) / 86400.0
+                if age_days > max_days:
+                    os.remove(fp)
+                    continue
+                size = int(st.st_size)
+                total += size
+                files.append((fp, st.st_mtime, size))
+            except Exception:
+                continue
+        limit_bytes = max_mb * 1024 * 1024
+        if total > limit_bytes:
+            # 오래된 파일부터 제거
+            files.sort(key=lambda x: x[1])
+            i = 0
+            while total > limit_bytes and i < len(files):
+                fp, _mt, sz = files[i]
+                try:
+                    os.remove(fp)
+                    total -= sz
+                except Exception:
+                    pass
+                i += 1
+    except Exception:
+        pass
+
+def clear_disk_cache() -> None:
+    try:
+        base = _cache_dir()
+        if os.path.isdir(base):
+            for name in os.listdir(base):
+                fp = os.path.join(base, name)
+                try:
+                    if os.path.isfile(fp):
+                        os.remove(fp)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 class MapFetchTask(QRunnable):
     def __init__(self, lat: float, lon: float, w: int, h: int, zoom: int, token: int, receiver: QObject, signal_name: str):
@@ -54,8 +127,9 @@ class MapFetchTask(QRunnable):
         pm = get_cached(self.lat, self.lon, self.w, self.h, self.zoom)
         if pm is None:
             try:
-                from .geocoding import get_google_static_map_png  # type: ignore
-                data = get_google_static_map_png(self.lat, self.lon, width=self.w, height=self.h, zoom=self.zoom)
+                from .geocoding import get_static_map_png  # type: ignore
+                # 제공자 고정: Google
+                data = get_static_map_png(self.lat, self.lon, width=self.w, height=self.h, zoom=self.zoom, provider='google')
                 if data:
                     pm2 = QPixmap()
                     if pm2.loadFromData(bytes(data)):
