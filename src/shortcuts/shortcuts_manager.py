@@ -84,6 +84,9 @@ COMMANDS: List[Command] = [
     Command("open_natural_search", "자연어 검색", "텍스트로 이미지 검색", "검색", "open_natural_search_dialog", ["Ctrl+K"]),
     Command("rerun_natural_search", "자연어 재검색(최근 질의)", "최근 질의로 재검색", "검색", "rerun_last_natural_search", ["Ctrl+Shift+K"]),
 
+    # Similar image search
+    Command("open_similar_search", "유사 검색 열기", "현재 사진과 유사한 사진 찾기", "검색", "open_similar_search_dialog", ["Ctrl+Shift+S", "Alt+S"]),
+
     # AI 분석
     Command("open_ai_analysis", "AI 분석 실행", "현재 사진 분석", "AI", "open_ai_analysis_dialog", ["Ctrl+Shift+A"]),
     Command("chain_ai_analysis", "연쇄 AI 분석 토글", "현재→다음 반복 분석 시작/중지", "AI", "toggle_chain_ai_analysis", ["Ctrl+Alt+A"]),
@@ -102,6 +105,9 @@ COMMANDS: List[Command] = [
     Command("open_recent_7", "최근 파일 7", "최근 파일 7 열기", "파일", "_open_recent_7", ["Alt+7"]),
     Command("open_recent_8", "최근 파일 8", "최근 파일 8 열기", "파일", "_open_recent_8", ["Alt+8"]),
     Command("open_recent_9", "최근 파일 9", "최근 파일 9 열기", "파일", "_open_recent_9", ["Alt+9"]),
+
+    # Logs
+    Command("open_logs_folder", "로그 폴더 열기", "로그 파일 폴더를 엽니다", "도움말", "open_logs_folder", ["Ctrl+Alt+O"]),
 ]
 
 

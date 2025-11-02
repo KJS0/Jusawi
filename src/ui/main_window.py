@@ -1419,9 +1419,38 @@ class JusawiViewer(QMainWindow):
         try:
             from .similar_search_dialog import SimilarSearchDialog
             dlg_ = SimilarSearchDialog(self, cur, folder)
+            # 다크 테마 적용을 위해 뷰어 테마러에 참조 전달
+            try:
+                self.similar_search_dialog = dlg_
+                from .theme import apply_ui_theme_and_spacing as _apply_theme
+                _apply_theme(self)
+            except Exception:
+                pass
             dlg_.exec()
         except Exception:
             pass
+        finally:
+            try:
+                self.similar_search_dialog = None
+            except Exception:
+                pass
+
+    def open_logs_folder(self) -> None:
+        try:
+            from ..utils.logging_setup import open_logs_folder as _open_logs
+            ok, err = _open_logs()
+            try:
+                if ok:
+                    self.statusBar().showMessage("로그 폴더를 열었습니다.", 3000)
+                else:
+                    self.statusBar().showMessage(f"로그 폴더 열기 실패: {err}", 4000)
+            except Exception:
+                pass
+        except Exception:
+            try:
+                self.statusBar().showMessage("로그 폴더 열기 실패", 4000)
+            except Exception:
+                pass
 
     # ----- 정보 패널 -----
     def toggle_info_panel(self) -> None:
