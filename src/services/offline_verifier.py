@@ -53,13 +53,12 @@ class OfflineVerifierService:
             pass
         self._db_path = os.path.join(base_dir, "offline_clip.sqlite3")
         self._ensure_db()
-        # 내부 가용성 플래그(호환 목적). 실제 사용은 available 프로퍼티 사용 권장
-        self._available = True
-        try:
-            # lazy load 예약: 실제 로드는 prepare()/is_ready()에서 수행
-            pass
-        except Exception:
-            self._available = False
+        if self._available:
+            try:
+                # lazy load on first use to avoid blocking init
+                pass
+            except Exception:
+                self._available = False
 
     @property
     def available(self) -> bool:

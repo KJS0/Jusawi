@@ -41,10 +41,6 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.search_button = QPushButton("검색")
     viewer.search_button.clicked.connect(viewer.open_natural_search_dialog)
 
-    # Similar image search button (placed next to search)
-    viewer.similar_button = QPushButton("유사 검색")
-    viewer.similar_button.clicked.connect(viewer.open_similar_search_dialog)
-
     viewer.settings_button = QPushButton("설정")
     viewer.settings_button.clicked.connect(viewer.open_settings_dialog)
 
@@ -83,7 +79,6 @@ def build_top_and_status_bars(viewer) -> None:
         viewer.recent_button,
         viewer.info_button,
         viewer.ai_button,
-        viewer.similar_button,
         viewer.settings_button,
         viewer.fullscreen_button,
         viewer.prev_button,
@@ -105,7 +100,13 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.button_layout.addWidget(viewer.ai_button)
     # 배치 버튼 제거됨
     viewer.button_layout.addWidget(viewer.search_button)
-    viewer.button_layout.addWidget(viewer.similar_button)
+    # Similar search button
+    try:
+        viewer.similar_button = QPushButton("유사 검색")
+        viewer.similar_button.clicked.connect(viewer.open_similar_search_dialog)
+        viewer.button_layout.addWidget(viewer.similar_button)
+    except Exception:
+        pass
     viewer.button_layout.addWidget(viewer.fullscreen_button)
     viewer.button_layout.addWidget(viewer.prev_button)
     viewer.button_layout.addWidget(viewer.next_button)

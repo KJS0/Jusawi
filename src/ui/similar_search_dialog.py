@@ -2,228 +2,202 @@ from __future__ import annotations
 
 import os
 from typing import List, Tuple
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QProgressDialog  # type: ignore[import]
+from PyQt6.QtGui import QIcon, QPixmap  # type: ignore[import]
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer  # type: ignore[import]
 
-from PyQt6.QtWidgets import (  # type: ignore[import]
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem, QMessageBox
-)
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal  # type: ignore[import]
+try:
+    from PIL import Image, ImageQt  # type: ignore
+except Exception:
+    Image = None  # type: ignore
+    ImageQt = None  # type: ignore
 
-from ..services.similarity_service import SimilarImageSearchService
-from ..utils.logging_setup import get_logger
-
-
-_log = get_logger("ui.SimilarSearchDialog")
+from ..services.similarity_service import SimilarityIndex
 
 
-class _SimilarWorker(QObject):
-    finished = pyqtSignal(list)
+class _Worker(QThread):
+    progress = pyqtSignal(int, str)
+    done = pyqtSignal(list)
     failed = pyqtSignal(str)
 
-    def __init__(self, svc: SimilarImageSearchService, query_image: str, files: List[str]):
+    def __init__(self, anchor: str, folder: str, svc: SimilarityIndex, top_k: int = 100):
         super().__init__()
+        self._anchor = anchor
+        self._folder = folder
         self._svc = svc
-        self._q = query_image
-        self._files = files
+        self._top_k = top_k
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
 
     def run(self):
         try:
-            res = self._svc.search_similar(self._q, self._files, top_k=80, exclude_self=True)
-            self.finished.emit(res)
+            self.progress.emit(10, "폴더 인덱싱…")
+            # 인덱싱 단계: 내부에서 캐시/스캔 처리
+            if self._cancel:
+                self.failed.emit("취소됨")
+                return
+            self._svc.build_or_load(self._folder)
+            self.progress.emit(60, "유사도 계산…")
+            if self._cancel:
+                self.failed.emit("취소됨")
+                return
+            # auto: 대용량 폴더는 ANN, 그 외에는 pHash→CLIP
+            res = self._svc.similar_auto(self._anchor, self._folder, top_k=self._top_k, mode="auto")
+            self.progress.emit(100, "완료")
+            self.done.emit(res)
         except Exception as e:
             self.failed.emit(str(e))
 
 
 class SimilarSearchDialog(QDialog):
-    def __init__(self, parent=None, files: List[str] | None = None, query_image: str | None = None):
+    def __init__(self, parent, anchor_path: str, folder: str):
         super().__init__(parent)
-        self.setWindowTitle("유사 사진 검색")
-        self._files = [p for p in (files or []) if p and os.path.isfile(p)]
-        self._query_image = str(query_image or "")
-        self._thread: QThread | None = None
-        self._worker: _SimilarWorker | None = None
-        self._pix_cache: dict[str, object] = {}
-        self._svc = SimilarImageSearchService()
+        self.setWindowTitle("유사 사진 찾기")
+        self._anchor = anchor_path
+        self._folder = folder
+        self._svc = SimilarityIndex()
+        self._worker: _Worker | None = None
+        self._progress: QProgressDialog | None = None
 
-        root = QVBoxLayout(self)
+        lay = QVBoxLayout(self)
+        self.listw = QListWidget(self)
         try:
-            root.setContentsMargins(8, 8, 8, 8)
-            root.setSpacing(6)
-        except Exception:
-            pass
+            # 탐색기 스타일 썸네일 그리드 구성 (4열 x 3행, 총 12개 초기 표시)
+            cols, rows = 4, 3
+            icon = QSize(160, 160)
+            # 텍스트 두 줄(+여유)을 위한 그리드 높이 확장
+            grid = QSize(190, 230)
+            spacing = 6
+            border = 16  # 여유 마진
+            width = cols * grid.width() + (cols - 1) * spacing + border
+            height = rows * grid.height() + (rows - 1) * spacing + border
 
-        btn_row = QHBoxLayout()
-        self.run_btn = QPushButton("실행")
-        self.run_btn.clicked.connect(self._on_run)
-        btn_row.addWidget(self.run_btn)
-        btn_row.addStretch(1)
-        close_btn = QPushButton("닫기")
-        close_btn.clicked.connect(self.accept)
-        btn_row.addWidget(close_btn)
-        root.addLayout(btn_row)
-
-        self.list_widget = QListWidget(self)
-        try:
-            from PyQt6.QtCore import QSize  # type: ignore[import]
-            vm = QListWidget.ViewMode.IconMode
-            icon_px = 192
-            viewer = self.parent()
+            self.listw.setViewMode(self.listw.ViewMode.IconMode)
+            self.listw.setIconSize(icon)
+            self.listw.setResizeMode(self.listw.ResizeMode.Adjust)
+            self.listw.setMovement(self.listw.Movement.Static)
+            self.listw.setUniformItemSizes(True)
+            self.listw.setWrapping(True)
+            self.listw.setGridSize(grid)
             try:
-                if viewer is not None:
-                    vm_str = str(getattr(viewer, "_search_result_view_mode", "grid"))
-                    vm = QListWidget.ViewMode.IconMode if vm_str == "grid" else QListWidget.ViewMode.ListMode
-                    icon_px = int(getattr(viewer, "_search_result_thumb_size", 192))
+                # 너무 긴 파일명은 가운데 생략으로 표시
+                self.listw.setTextElideMode(Qt.TextElideMode.ElideMiddle)
             except Exception:
                 pass
-            self.list_widget.setViewMode(vm)
-            self.list_widget.setIconSize(QSize(icon_px, icon_px))
-            self.list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
-            self.list_widget.setMovement(QListWidget.Movement.Static)
-            self.list_widget.setSpacing(10)
-            self.list_widget.setStyleSheet(
-                "QListWidget { background-color: #1F1F1F; color: #EAEAEA; border: 1px solid #333; }"
-                " QListWidget::item { color: #EAEAEA; }"
-                " QListWidget::item:selected { background-color: #2B2B2B; color: #FFFFFF; }"
-            )
+            self.listw.setSpacing(spacing)
+            # 4열 강제: 리스트 너비를 그리드 폭에 맞춰 고정
+            self.listw.setMinimumWidth(width)
+            self.listw.setMaximumWidth(width)
+            self.listw.setMinimumHeight(height)
+            self.listw.setMaximumHeight(height)
         except Exception:
             pass
-        root.addWidget(self.list_widget, 1)
+        lay.addWidget(self.listw, 1)
+        self.listw.itemDoubleClicked.connect(self._on_open)
 
-        try:
-            from PyQt6.QtGui import QShortcut, QKeySequence  # type: ignore[import]
-            sc = QShortcut(QKeySequence("Return"), self)
-            sc.activated.connect(self._on_open_selected)
-        except Exception:
-            pass
+        self._pending: list[tuple[str, float]] = []
+        self._batch_size = 12
+        self._start_search()
 
-        # 자동 실행: 쿼리 이미지와 파일이 준비된 경우
+    def _start_search(self):
+        self.listw.clear()
+        # 진행/취소 가능한 로딩창
+        self._progress = QProgressDialog("유사 사진 검색 준비 중…", "취소", 0, 100, self)
         try:
-            if self._query_image and self._files:
-                self._on_run()
+            self._progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+            self._progress.setMinimumDuration(0)
+            self._progress.setAutoClose(True)
+            self._progress.setAutoReset(True)
+            self._progress.setValue(0)
+            self._progress.show()
         except Exception:
             pass
-
-    def _on_run(self):
-        if not (self._query_image and os.path.isfile(self._query_image)):
-            QMessageBox.warning(self, "유사 검색", "현재 사진이 유효하지 않습니다.")
-            return
-        if not self._files:
-            QMessageBox.information(self, "유사 검색", "검색할 파일이 없습니다.")
-            return
-        # 중복 실행 방지
-        try:
-            self.run_btn.setEnabled(False)
-        except Exception:
-            pass
-        self.list_widget.clear()
-        self._thread = QThread(self)
-        self._worker = _SimilarWorker(self._svc, self._query_image, self._files)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._on_results)
+        self._progress.canceled.connect(self._on_cancel)
+        # 워커 스레드 시작
+        self._worker = _Worker(self._anchor, self._folder, self._svc, top_k=12)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.done.connect(self._on_done)
         self._worker.failed.connect(self._on_failed)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.failed.connect(self._thread.quit)
-        self._thread.start()
+        self._worker.start()
 
-    def _on_failed(self, msg: str):
+    def _on_progress(self, val: int, msg: str):
         try:
-            self.run_btn.setEnabled(True)
-        except Exception:
-            pass
-        try:
-            QMessageBox.warning(self, "유사 검색 실패", msg or "알 수 없는 오류")
+            if self._progress:
+                self._progress.setValue(int(val))
+                self._progress.setLabelText(msg)
         except Exception:
             pass
 
-    def _on_results(self, results: List[Tuple[str, float]]):
+    def _on_done(self, res: List[Tuple[str, float]]):
         try:
-            self.run_btn.setEnabled(True)
+            if self._progress:
+                self._progress.close()
         except Exception:
             pass
-        self._render_results(results)
+        self._progress = None
+        self._worker = None
+        # 배치로 추가해 UI 끊김 완화
+        self._pending = list(res)
+        self._drain_batch()
 
-    def _render_results(self, results: List[Tuple[str, float]]):
-        self.list_widget.clear()
-
-        try:
-            from PyQt6.QtCore import QSize  # type: ignore[import]
-            from PyQt6.QtGui import QPixmap, QIcon  # type: ignore[import]
-        except Exception:
-            QSize = None  # type: ignore
-            QPixmap = None  # type: ignore
-            QIcon = None  # type: ignore
-
-        show_score = True
-        icon_px = 192
-        try:
-            viewer = self.parent()
-            if viewer is not None:
-                icon_px = int(getattr(viewer, "_search_result_thumb_size", 192))
-                show_score = bool(getattr(viewer, "_search_show_score", True))
-        except Exception:
-            pass
-
-        def _load_icon(path: str, box: int):
-            if path in self._pix_cache:
-                return self._pix_cache[path]
+    def _drain_batch(self):
+        if not self._pending:
+            return
+        chunk = self._pending[:self._batch_size]
+        self._pending = self._pending[self._batch_size:]
+        # grid와 아이콘/텍스트 레이아웃 파라미터는 초기 구성과 동일하게 사용
+        grid_size = QSize(190, 230)
+        for path, score in chunk:
+            it = QListWidgetItem(f"{os.path.basename(path)}  ({score:.3f})")
+            pm = QPixmap(path)
+            if pm.isNull() and Image is not None and ImageQt is not None:
+                try:
+                    with Image.open(path) as im:
+                        im.thumbnail((160,160))
+                        pm = QPixmap.fromImage(ImageQt.ImageQt(im))  # type: ignore
+                except Exception:
+                    pass
+            if not pm.isNull():
+                it.setIcon(QIcon(pm))
             try:
-                from PIL import Image  # type: ignore
-            except Exception:
-                return None
-            if QPixmap is None or QIcon is None:
-                return None
-            try:
-                with Image.open(path) as im:
-                    im = im.convert("RGB")
-                    im.thumbnail((box, box))
-                    try:
-                        import io
-                        bio = io.BytesIO()
-                        im.save(bio, format="PNG")
-                        data = bio.getvalue()
-                    except Exception:
-                        return None
-                pix = QPixmap()
-                pix.loadFromData(data)
-                icon = QIcon(pix)
-                self._pix_cache[path] = icon
-                return icon
-            except Exception:
-                return None
-
-        for path, score in results:
-            base = os.path.basename(path)
-            # 0..1 범위 점수 표시 형식 고정
-            if score < 0.0:
-                score = 0.0
-            if score > 1.0:
-                score = 1.0
-            label = f"{base}\n{score:.3f}" if show_score else base
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            icon = _load_icon(path, int(icon_px))
-            try:
-                if icon is not None:
-                    item.setIcon(icon)
-                    if QSize is not None:
-                        item.setSizeHint(QSize(int(icon_px + 20), int(icon_px + (40 if show_score else 28))))
+                it.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+                it.setSizeHint(grid_size)
             except Exception:
                 pass
-            self.list_widget.addItem(item)
+            it.setData(Qt.ItemDataRole.UserRole, path)
+            self.listw.addItem(it)
+        if self._pending:
+            QTimer.singleShot(0, self._drain_batch)
 
-    def _on_open_selected(self):
-        items = self.list_widget.selectedItems()
-        if not items:
-            return
-        path = items[0].data(Qt.ItemDataRole.UserRole)
+    def _on_failed(self, err: str):
         try:
-            viewer = self.parent()
-            if viewer and hasattr(viewer, "load_image"):
-                viewer.load_image(path, source='search')
-                self.accept()
-                return
+            if self._progress:
+                self._progress.close()
         except Exception:
             pass
-        QMessageBox.information(self, "열기", str(path))
+        self._progress = None
+        self._worker = None
+        try:
+            self.listw.clear()
+            self.listw.addItem(QListWidgetItem(f"검색 실패: {err}"))
+        except Exception:
+            pass
+
+    def _on_cancel(self):
+        try:
+            if self._worker:
+                self._worker.cancel()
+        except Exception:
+            pass
+
+    def _on_open(self, item: QListWidgetItem):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        try:
+            self.parent().load_image(path, source='similar')
+            self.accept()
+        except Exception:
+            pass
 
 
