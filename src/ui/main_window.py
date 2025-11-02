@@ -1323,6 +1323,9 @@ class JusawiViewer(QMainWindow):
     def open_natural_search_dialog(self):
         dlg.open_natural_search_dialog(self)
 
+    def open_similar_search_dialog(self):
+        dlg.open_similar_search_dialog(self)
+
     def rerun_last_natural_search(self):
         try:
             q = str(getattr(self, "_last_natural_query", "") or "")
@@ -1407,21 +1410,7 @@ class JusawiViewer(QMainWindow):
             pass
         self.start_chain_ai_analysis()
 
-    def open_similar_search_dialog(self):
-        cur = self.current_image_path or ""
-        if not cur or not os.path.isfile(cur):
-            try:
-                self.statusBar().showMessage("먼저 사진을 열어주세요.", 3000)
-            except Exception:
-                pass
-            return
-        folder = os.path.dirname(cur)
-        try:
-            from .similar_search_dialog import SimilarSearchDialog
-            dlg_ = SimilarSearchDialog(self, cur, folder)
-            dlg_.exec()
-        except Exception:
-            pass
+    # 유사 검색 대화상자 기능 제거됨
 
     # ----- 정보 패널 -----
     def toggle_info_panel(self) -> None:

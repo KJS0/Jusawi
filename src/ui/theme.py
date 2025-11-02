@@ -141,7 +141,6 @@ def apply_ui_theme_and_spacing(viewer) -> None:
             'shortcuts_help_dialog',
             'ai_analysis_dialog',
             'natural_search_dialog',
-            'similar_search_dialog',
         ]:
             dlg = getattr(viewer, name, None)
             if dlg is None:
